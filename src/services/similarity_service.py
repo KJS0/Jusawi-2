@@ -69,7 +69,19 @@ class SimilarityIndex:
 
     def _ensure_model(self):
         if self._model is None and _HAS_CLIP:
-            # CLIP ViT-B/32
+            # 로컬 모델 폴더 우선 사용: <repo_root>/models/clip-ViT-B-32
+            try:
+                base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+                local_dir = os.path.join(base, "models", "clip-ViT-B-32")
+            except Exception:
+                local_dir = ""
+            if local_dir and os.path.isdir(local_dir):
+                try:
+                    self._model = SentenceTransformer(local_dir)  # type: ignore
+                    return
+                except Exception:
+                    pass
+            # 기본: 허브에서 로드(캐시 사용)
             self._model = SentenceTransformer("clip-ViT-B-32")
 
     def _is_image(self, path: str) -> bool:

@@ -41,7 +41,6 @@ class _Worker(QThread):
             if self._cancel:
                 self.failed.emit("취소됨")
                 return
-            self._svc.build_or_load(self._folder)
             self.progress.emit(60, "유사도 계산…")
             if self._cancel:
                 self.failed.emit("취소됨")
@@ -65,7 +64,8 @@ class SimilarSearchDialog(QDialog):
         self._folder = folder
         self._svc = SimilarityIndex()
         self._worker: _Worker | None = None
-        self._progress: QProgressDialog | None = None
+        self._busy: QDialog | None = None
+        self._busy_label: QLabel | None = None
 
         lay = QVBoxLayout(self)
         self.listw = QListWidget(self)
@@ -151,26 +151,28 @@ class SimilarSearchDialog(QDialog):
             _log.info("similar_dialog_start | anchor=%s | dir=%s", os.path.basename(self._anchor), os.path.basename(self._folder))
         except Exception:
             pass
-        # 진행/취소 가능한 로딩창
-        self._progress = QProgressDialog("유사 사진 검색 준비 중…", "취소", 0, 100, self)
+        # 심플 로딩창(진행 막대 없음)
         try:
-            self._progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-            self._progress.setMinimumDuration(0)
-            self._progress.setAutoClose(True)
-            self._progress.setAutoReset(True)
-            self._progress.setValue(0)
-            self._progress.show()
+            self._busy = QDialog(self)
+            self._busy.setWindowTitle("검색")
+            self._busy.setWindowModality(Qt.WindowModality.ApplicationModal)
+            v = QVBoxLayout(self._busy)
+            self._busy_label = QLabel("검색 중... (탐색 과정에서 시간이 걸릴 수 있습니다)", self._busy)
             try:
-                self._progress.setStyleSheet(
+                self._busy_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            except Exception:
+                pass
+            v.addWidget(self._busy_label)
+            try:
+                self._busy.setStyleSheet(
                     "QDialog { background-color: #373737; color: #EAEAEA; }"
                     " QLabel { color: #EAEAEA; }"
-                    " QPushButton { color: #EAEAEA; background-color: transparent; border: 1px solid #555; padding: 4px 8px; border-radius: 4px; }"
                 )
             except Exception:
                 pass
+            self._busy.show()
         except Exception:
             pass
-        self._progress.canceled.connect(self._on_cancel)
         # 워커 스레드 시작
         self._worker = _Worker(self._anchor, self._folder, self._svc, top_k=12)
         self._worker.progress.connect(self._on_progress)
@@ -180,19 +182,21 @@ class SimilarSearchDialog(QDialog):
 
     def _on_progress(self, val: int, msg: str):
         try:
-            if self._progress:
-                self._progress.setValue(int(val))
-                self._progress.setLabelText(msg)
+            if self._busy_label:
+                # 메시지는 고정 문구 유지 요구에 따라 업데이트하지 않아도 됨
+                # 필요 시 다음 라인을 활성화:
+                # self._busy_label.setText(msg)
+                pass
         except Exception:
             pass
 
     def _on_done(self, res: List[Tuple[str, float]]):
         try:
-            if self._progress:
-                self._progress.close()
+            if self._busy:
+                self._busy.close()
         except Exception:
             pass
-        self._progress = None
+        self._busy = None
         self._worker = None
         # 배치로 추가해 UI 끊김 완화
         self._pending = list(res)
@@ -235,11 +239,11 @@ class SimilarSearchDialog(QDialog):
 
     def _on_failed(self, err: str):
         try:
-            if self._progress:
-                self._progress.close()
+            if self._busy:
+                self._busy.close()
         except Exception:
             pass
-        self._progress = None
+        self._busy = None
         self._worker = None
         try:
             self.listw.clear()
