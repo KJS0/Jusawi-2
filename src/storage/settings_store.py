@@ -163,22 +163,7 @@ def _export_viewer_to_yaml(viewer: Any) -> None:  # noqa: ANN401
             "min_interval_ms": int(getattr(viewer, "_nav_min_interval_ms", 100)),
         }
         cfg["ui"] = {
-            # 하위 호환 키 유지
             "filmstrip_auto_center": bool(getattr(viewer, "_filmstrip_auto_center", True)),
-            # 신규: 필름스트립 스크롤 모드/크기/스타일
-            "filmstrip_scroll_mode": str(getattr(viewer, "_filmstrip_scroll_mode", "always")),
-            "filmstrip_size_idx": int(getattr(viewer, "_filmstrip_size_idx", -1)),
-            "filmstrip_remember_last_size": bool(getattr(viewer, "_filmstrip_remember_last_size", True)),
-            "filmstrip_default_size_idx": int(getattr(viewer, "_filmstrip_default_size_idx", 3)),
-            "filmstrip_max_height_cap": int(getattr(viewer, "_filmstrip_max_height_cap", 0)),
-            "filmstrip_item_h_margin": int(getattr(viewer, "_filmstrip_item_h_margin", 12)),
-            "filmstrip_item_v_margin": int(getattr(viewer, "_filmstrip_item_v_margin", 14)),
-            "filmstrip_border_thickness": int(getattr(viewer, "_filmstrip_border_thickness", 3)),
-            "filmstrip_border_color": str(getattr(viewer, "_filmstrip_border_color", "#4DA3FF")),
-            "filmstrip_show_separator": bool(getattr(viewer, "_filmstrip_show_separator", True)),
-            "filmstrip_tt_name": bool(getattr(viewer, "_filmstrip_tt_name", True)),
-            "filmstrip_tt_res": bool(getattr(viewer, "_filmstrip_tt_res", False)),
-            "filmstrip_tt_rating": bool(getattr(viewer, "_filmstrip_tt_rating", False)),
         }
         # view
         cfg["view"] = {
@@ -255,9 +240,6 @@ def _export_viewer_to_yaml(viewer: Any) -> None:  # noqa: ANN401
         cfg["thumb_cache"] = {
             "quality": int(getattr(viewer, "_thumb_cache_quality", 85)),
             "dir": str(getattr(viewer, "_thumb_cache_dir", "")),
-            "max_mb": int(getattr(viewer, "_thumb_cache_max_mb", 0)),
-            "gc_interval_min": int(getattr(viewer, "_thumb_cache_gc_interval_min", 0)),
-            "prune_days": int(getattr(viewer, "_thumb_cache_prune_days", 0)),
         }
         # ai
         cfg["ai"] = {
@@ -1100,66 +1082,10 @@ def load_settings(viewer) -> None:
             viewer._nav_min_interval_ms = int(viewer.settings.value("nav/min_interval_ms", 100))
         except Exception:
             viewer._nav_min_interval_ms = 100
-        # 스크롤 모드(신규) + 하위 호환 로드
         try:
-            viewer._filmstrip_scroll_mode = str(viewer.settings.value("ui/filmstrip_scroll_mode", "", str))
+            viewer._filmstrip_auto_center = bool(viewer.settings.value("ui/filmstrip_auto_center", True, bool))
         except Exception:
-            viewer._filmstrip_scroll_mode = ""
-        if not viewer._filmstrip_scroll_mode:
-            try:
-                ac = bool(viewer.settings.value("ui/filmstrip_auto_center", True, bool))
-            except Exception:
-                ac = True
-            viewer._filmstrip_scroll_mode = ("always" if ac else "off")
-        # 기타 필름스트립 UI 옵션
-        try:
-            viewer._filmstrip_size_idx = int(viewer.settings.value("ui/filmstrip_size_idx", -1))
-        except Exception:
-            viewer._filmstrip_size_idx = -1
-        try:
-            viewer._filmstrip_remember_last_size = bool(viewer.settings.value("ui/filmstrip_remember_last_size", True, bool))
-        except Exception:
-            viewer._filmstrip_remember_last_size = True
-        try:
-            viewer._filmstrip_default_size_idx = int(viewer.settings.value("ui/filmstrip_default_size_idx", 3))
-        except Exception:
-            viewer._filmstrip_default_size_idx = 3
-        try:
-            viewer._filmstrip_max_height_cap = int(viewer.settings.value("ui/filmstrip_max_height_cap", 0))
-        except Exception:
-            viewer._filmstrip_max_height_cap = 0
-        try:
-            viewer._filmstrip_item_h_margin = int(viewer.settings.value("ui/filmstrip_item_h_margin", 12))
-        except Exception:
-            viewer._filmstrip_item_h_margin = 12
-        try:
-            viewer._filmstrip_item_v_margin = int(viewer.settings.value("ui/filmstrip_item_v_margin", 14))
-        except Exception:
-            viewer._filmstrip_item_v_margin = 14
-        try:
-            viewer._filmstrip_border_thickness = int(viewer.settings.value("ui/filmstrip_border_thickness", 3))
-        except Exception:
-            viewer._filmstrip_border_thickness = 3
-        try:
-            viewer._filmstrip_border_color = str(viewer.settings.value("ui/filmstrip_border_color", "#4DA3FF", str))
-        except Exception:
-            viewer._filmstrip_border_color = "#4DA3FF"
-        try:
-            viewer._filmstrip_show_separator = bool(viewer.settings.value("ui/filmstrip_show_separator", True, bool))
-        except Exception:
-            viewer._filmstrip_show_separator = True
-        try:
-            viewer._filmstrip_tt_name = bool(viewer.settings.value("ui/filmstrip_tt_name", True, bool))
-        except Exception:
-            viewer._filmstrip_tt_name = True
-        try:
-            viewer._filmstrip_tt_res = bool(viewer.settings.value("ui/filmstrip_tt_res", False, bool))
-        except Exception:
-            viewer._filmstrip_tt_res = False
-        try:
-            viewer._filmstrip_tt_rating = bool(viewer.settings.value("ui/filmstrip_tt_rating", False, bool))
-        except Exception:
-            viewer._filmstrip_tt_rating = False
+            viewer._filmstrip_auto_center = True
         # 우선 정렬 키는 제거(메타데이터/파일명만 유지)
         try:
             viewer._zoom_policy = str(viewer.settings.value("view/zoom_policy", "mode", str))
@@ -1287,18 +1213,6 @@ def load_settings(viewer) -> None:
             viewer._thumb_cache_dir = str(viewer.settings.value("thumb_cache/dir", "", str))
         except Exception:
             viewer._thumb_cache_dir = ""
-        try:
-            viewer._thumb_cache_max_mb = int(viewer.settings.value("thumb_cache/max_mb", 0))
-        except Exception:
-            viewer._thumb_cache_max_mb = 0
-        try:
-            viewer._thumb_cache_gc_interval_min = int(viewer.settings.value("thumb_cache/gc_interval_min", 0))
-        except Exception:
-            viewer._thumb_cache_gc_interval_min = 0
-        try:
-            viewer._thumb_cache_prune_days = int(viewer.settings.value("thumb_cache/prune_days", 0))
-        except Exception:
-            viewer._thumb_cache_prune_days = 0
         # YAML 구성 최종 적용: QSettings에서 읽은 값 위에 덮어써서 사용자가 명시한 config.yaml이 우선
         try:
             if _cfg_yaml_cached:
@@ -1415,22 +1329,7 @@ def save_settings(viewer) -> None:
         # Navigation/Filmstrip/Zoom 정책 저장
         viewer.settings.setValue("nav/wrap_ends", bool(getattr(viewer, "_nav_wrap_ends", False)))
         viewer.settings.setValue("nav/min_interval_ms", int(getattr(viewer, "_nav_min_interval_ms", 100)))
-        # 신규 스크롤 모드 저장 + 하위 호환 키도 유지 저장
-        viewer.settings.setValue("ui/filmstrip_scroll_mode", str(getattr(viewer, "_filmstrip_scroll_mode", "always")))
-        viewer.settings.setValue("ui/filmstrip_auto_center", bool(getattr(viewer, "_filmstrip_scroll_mode", "always") != "off"))
-        # 필름스트립 UI 추가 저장 항목
-        viewer.settings.setValue("ui/filmstrip_size_idx", int(getattr(viewer, "_filmstrip_size_idx", -1)))
-        viewer.settings.setValue("ui/filmstrip_remember_last_size", bool(getattr(viewer, "_filmstrip_remember_last_size", True)))
-        viewer.settings.setValue("ui/filmstrip_default_size_idx", int(getattr(viewer, "_filmstrip_default_size_idx", 3)))
-        viewer.settings.setValue("ui/filmstrip_max_height_cap", int(getattr(viewer, "_filmstrip_max_height_cap", 0)))
-        viewer.settings.setValue("ui/filmstrip_item_h_margin", int(getattr(viewer, "_filmstrip_item_h_margin", 12)))
-        viewer.settings.setValue("ui/filmstrip_item_v_margin", int(getattr(viewer, "_filmstrip_item_v_margin", 14)))
-        viewer.settings.setValue("ui/filmstrip_border_thickness", int(getattr(viewer, "_filmstrip_border_thickness", 3)))
-        viewer.settings.setValue("ui/filmstrip_border_color", str(getattr(viewer, "_filmstrip_border_color", "#4DA3FF")))
-        viewer.settings.setValue("ui/filmstrip_show_separator", bool(getattr(viewer, "_filmstrip_show_separator", True)))
-        viewer.settings.setValue("ui/filmstrip_tt_name", bool(getattr(viewer, "_filmstrip_tt_name", True)))
-        viewer.settings.setValue("ui/filmstrip_tt_res", bool(getattr(viewer, "_filmstrip_tt_res", False)))
-        viewer.settings.setValue("ui/filmstrip_tt_rating", bool(getattr(viewer, "_filmstrip_tt_rating", False)))
+        viewer.settings.setValue("ui/filmstrip_auto_center", bool(getattr(viewer, "_filmstrip_auto_center", True)))
         # dir/sort_primary 저장 제거
         viewer.settings.setValue("view/zoom_policy", str(getattr(viewer, "_zoom_policy", "mode")))
         # 전체화면/오버레이 관련 저장
@@ -1496,9 +1395,6 @@ def save_settings(viewer) -> None:
         # 썸네일 캐시 저장
         viewer.settings.setValue("thumb_cache/quality", int(getattr(viewer, "_thumb_cache_quality", 85)))
         viewer.settings.setValue("thumb_cache/dir", str(getattr(viewer, "_thumb_cache_dir", "")))
-        viewer.settings.setValue("thumb_cache/max_mb", int(getattr(viewer, "_thumb_cache_max_mb", 0)))
-        viewer.settings.setValue("thumb_cache/gc_interval_min", int(getattr(viewer, "_thumb_cache_gc_interval_min", 0)))
-        viewer.settings.setValue("thumb_cache/prune_days", int(getattr(viewer, "_thumb_cache_prune_days", 0)))
         viewer.settings.setValue("prefetch/preload_direction", str(getattr(viewer, "_preload_direction", "both")))
         viewer.settings.setValue("prefetch/preload_priority", int(getattr(viewer, "_preload_priority", -1)))
         viewer.settings.setValue("prefetch/preload_max_concurrency", int(getattr(viewer, "_preload_max_concurrency", 0)))

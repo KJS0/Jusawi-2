@@ -108,7 +108,6 @@ COMMANDS: List[Command] = [
 
     # Logs
     Command("open_logs_folder", "로그 폴더 열기", "로그 파일 폴더를 엽니다", "도움말", "open_logs_folder", ["Ctrl+Alt+O"]),
-    
 ]
 
 

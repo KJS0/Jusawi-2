@@ -14,7 +14,6 @@ from .settings import (
     ViewSettingsPage,
     ColorSettingsPage,
     FullscreenSettingsPage,
-    FilmstripSettingsPage,
 )
 
 
@@ -174,25 +173,6 @@ class SettingsDialog(QDialog):
                 setattr(self, _name, getattr(self.view_page, _name))
             except Exception:
                 pass
-
-        # ----- 필름스트립 탭 ----- (신규)
-        self.filmstrip_tab = QWidget(self)
-        self.tabs.addTab(self.filmstrip_tab, "필름스트립")
-        film_layout = QVBoxLayout(self.filmstrip_tab)
-        try:
-            film_layout.setContentsMargins(0, 0, 0, 0)
-            film_layout.setSpacing(0)
-        except Exception:
-            pass
-        self.filmstrip_page = FilmstripSettingsPage(None)
-        try:
-            _sa_fs = QScrollArea(self.filmstrip_tab)
-            _sa_fs.setWidgetResizable(True)
-            _sa_fs.setFrameShape(QScrollArea.Shape.NoFrame)
-            _sa_fs.setWidget(self.filmstrip_page)
-            film_layout.addWidget(_sa_fs)
-        except Exception:
-            film_layout.addWidget(self.filmstrip_page)
 
         # ----- 색상 관리 탭 ----- (모듈화)
         self.color_tab = QWidget(self)
@@ -448,11 +428,6 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
         try:
-            if hasattr(self, "filmstrip_page"):
-                self.filmstrip_page.load_from_viewer(viewer)
-        except Exception:
-            pass
-        try:
             if hasattr(self, "fullscreen_page"):
                 self.fullscreen_page.load_from_viewer(viewer)
         except Exception:
@@ -495,11 +470,6 @@ class SettingsDialog(QDialog):
         try:
             if hasattr(self, "view_page"):
                 self.view_page.apply_to_viewer(viewer)
-        except Exception:
-            pass
-        try:
-            if hasattr(self, "filmstrip_page"):
-                self.filmstrip_page.apply_to_viewer(viewer)
         except Exception:
             pass
         try:

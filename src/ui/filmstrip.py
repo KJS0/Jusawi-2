@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import time
 import hashlib
 import threading
 from dataclasses import dataclass
@@ -56,26 +55,11 @@ class FilmItem:
 
 
 class ThumbCache:
-    def __init__(self, quality: int = 85, root_dir: str | None = None,
-                 max_mb: int = 0, gc_interval_s: int = 0, prune_days: int = 0):
+    def __init__(self, quality: int = 85, root_dir: str | None = None):
         self.root = root_dir or _cache_root()
         self.quality = int(quality)
         self._mem: Dict[str, QPixmap] = {}
         self._lock = threading.Lock()
-        # GC/정리 옵션
-        try:
-            self._max_bytes = max(0, int(max_mb)) * 1024 * 1024
-        except Exception:
-            self._max_bytes = 0
-        try:
-            self._gc_interval_s = max(0, int(gc_interval_s))
-        except Exception:
-            self._gc_interval_s = 0
-        try:
-            self._prune_seconds = max(0, int(prune_days)) * 86400
-        except Exception:
-            self._prune_seconds = 0
-        self._last_gc_ts = 0.0
 
     def _disk_path(self, key: str, size: int) -> str:
         return os.path.join(self.root, f"{key}_{size}.jpg")
@@ -104,70 +88,10 @@ class ThumbCache:
             pm.save(p, "JPG", self.quality)
         except Exception:
             pass
-        try:
-            self._maybe_gc()
-        except Exception:
-            pass
 
     def clear(self) -> None:
         with self._lock:
             self._mem.clear()
-
-    # 내부: 캐시 용량/기간 한도에 맞춰 정리
-    def _maybe_gc(self) -> None:
-        now = time.time()
-        if self._gc_interval_s > 0 and (now - float(self._last_gc_ts)) < float(self._gc_interval_s):
-            return
-        self._last_gc_ts = now
-        try:
-            files = []
-            for name in os.listdir(self.root):
-                if not name.lower().endswith('.jpg'):
-                    continue
-                path = os.path.join(self.root, name)
-                try:
-                    st = os.stat(path)
-                    files.append((path, float(st.st_mtime), int(st.st_size)))
-                except Exception:
-                    pass
-            # 오래된 항목 우선 삭제(기간 초과)
-            if self._prune_seconds > 0:
-                cutoff = now - float(self._prune_seconds)
-                for path, mtime, _sz in list(files):
-                    if mtime < cutoff:
-                        try:
-                            os.remove(path)
-                        except Exception:
-                            pass
-                # 목록 재구성
-                _ref = []
-                for name in os.listdir(self.root):
-                    if not name.lower().endswith('.jpg'):
-                        continue
-                    path2 = os.path.join(self.root, name)
-                    try:
-                        st2 = os.stat(path2)
-                        _ref.append((path2, float(st2.st_mtime), int(st2.st_size)))
-                    except Exception:
-                        pass
-                files = _ref
-            # 용량 초과 시 오래된 순으로 삭제
-            if self._max_bytes > 0:
-                total = 0
-                for _p, _mt, sz in files:
-                    total += int(sz)
-                if total > self._max_bytes:
-                    files.sort(key=lambda x: x[1])  # mtime asc
-                    for path, _mt, sz in files:
-                        try:
-                            os.remove(path)
-                            total -= int(sz)
-                            if total <= self._max_bytes:
-                                break
-                        except Exception:
-                            pass
-        except Exception:
-            pass
 
 
 ## EXIF 메타는 필름 스트립에서 사용하지 않음(썸네일/경로만)
@@ -319,34 +243,8 @@ class FilmstripModel(QAbstractListModel):
                 self._maybe_request_thumb(idx.row())
             return pm
         if role == Qt.ItemDataRole.ToolTipRole:
-            # 사용자 구성에 따른 툴팁 조합
-            try:
-                parent = getattr(self, 'parent', lambda: None)()
-            except Exception:
-                parent = None
-            name = os.path.basename(it.path)
-            parts: List[str] = []
-            try:
-                if parent is not None and bool(getattr(parent, "_filmstrip_tt_name", True)):
-                    parts.append(name)
-            except Exception:
-                parts.append(name)
-            try:
-                if parent is not None and bool(getattr(parent, "_filmstrip_tt_res", False)):
-                    try:
-                        r = QImageReader(it.path).size()
-                        if int(r.width()) > 0 and int(r.height()) > 0:
-                            parts.append(f"{int(r.width())}×{int(r.height())}")
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            try:
-                if parent is not None and bool(getattr(parent, "_filmstrip_tt_rating", False)):
-                    parts.append(f"★{int((it.meta or {}).get('rating', 0))}")
-            except Exception:
-                pass
-            return " · ".join(parts) if parts else name
+            # 파일명만 툴팁으로 표시
+            return os.path.basename(it.path)
         if role == Qt.ItemDataRole.AccessibleTextRole:
             return os.path.basename(it.path)
         return None
@@ -411,13 +309,7 @@ class FilmstripDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         # 필름 스트립은 라이트 모드에서도 다크 테마와 동일 스타일(요청사항)
         bg_col = QColor("#2B2B2B")
-        try:
-            # 사용자 선택 테두리 색상
-            par = self.parent()
-            sel_hex = str(getattr(par, "_filmstrip_border_color", "#4DA3FF")) if par is not None else "#4DA3FF"
-        except Exception:
-            sel_hex = "#4DA3FF"
-        sel_col = QColor(sel_hex)
+        sel_col = QColor("#4DA3FF")
         painter.fillRect(r, bg_col)
         # 상태값 미리 추출
         try:
@@ -433,12 +325,6 @@ class FilmstripDelegate(QStyledItemDelegate):
 
         # 썸네일 중앙 배치(파일명은 숨김). DPR을 고려해 DIP 기준으로 정렬
         pm = index.data(Roles.PixmapRole)
-        try:
-            par = self.parent()
-            h_margin = int(getattr(par, "_item_h_margin", 12)) if par is not None else 12
-            v_margin = int(getattr(par, "_item_v_margin", 14)) if par is not None else 14
-        except Exception:
-            h_margin = 12; v_margin = 14
         if isinstance(pm, QPixmap) and not pm.isNull():
             try:
                 dpr = float(getattr(pm, 'devicePixelRatio', lambda: 1.0)())
@@ -447,8 +333,8 @@ class FilmstripDelegate(QStyledItemDelegate):
             pw, ph = pm.width(), pm.height()
             dpw = max(1, int(round(pw / max(1.0, dpr))))
             dph = max(1, int(round(ph / max(1.0, dpr))))
-            x = r.x() + max(0, (r.width() - dpw) // 2)
-            y = r.y() + max(0, (r.height() - dph) // 2)
+            x = r.x() + (r.width() - dpw) // 2
+            y = r.y() + (r.height() - dph) // 2
             if flag == "rejected" and not is_selected:
                 painter.save()
                 painter.setOpacity(0.35)
@@ -461,35 +347,21 @@ class FilmstripDelegate(QStyledItemDelegate):
             painter.fillRect(r.adjusted(6, 6, -6, -6), bg_col)
         # 썸네일 사이 경계선(미세 구분선)
         try:
-            par2 = self.parent()
-            show_sep = bool(getattr(par2, "_filmstrip_show_separator", True)) if par2 is not None else True
-            if show_sep:
-                sep_col = QColor("#3A3A3A")
-                painter.setPen(QPen(sep_col, 1))
-                painter.drawLine(r.topRight(), r.bottomRight())
+            sep_col = QColor("#3A3A3A")
+            painter.setPen(QPen(sep_col, 1))
+            painter.drawLine(r.topRight(), r.bottomRight())
         except Exception:
             pass
         if option.state & QStyle.StateFlag.State_Selected:
-            try:
-                par3 = self.parent()
-                th = int(getattr(par3, "_filmstrip_border_thickness", 3)) if par3 is not None else 3
-            except Exception:
-                th = 3
-            pen = QPen(sel_col, max(1, th))
+            pen = QPen(sel_col, 3)
             painter.setPen(pen)
             painter.drawRoundedRect(r.adjusted(2, 2, -2, -2), 4, 4)
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        # 셀 크기 = 썸네일 + 사용자 여백
+        # 셀 크기는 현재 썸네일 단계 + 여백(좌우 12px, 상하 14px)
         size = int(self._get_size())
-        try:
-            par = self.parent()
-            h_margin = int(getattr(par, "_item_h_margin", 12)) if par is not None else 12
-            v_margin = int(getattr(par, "_item_v_margin", 14)) if par is not None else 14
-        except Exception:
-            h_margin = 12; v_margin = 14
-        return QSize(size + max(0, h_margin) * 2, size + max(0, v_margin) * 2)
+        return QSize(size + 24, size + 28)
 
 
 class FilmstripView(QListView):
@@ -497,20 +369,8 @@ class FilmstripView(QListView):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        # 기본 크기 단계: 부모 설정에 따라 초기화
-        try:
-            remember = bool(getattr(parent, "_filmstrip_remember_last_size", True)) if parent is not None else True
-        except Exception:
-            remember = True
-        try:
-            default_idx = int(getattr(parent, "_filmstrip_default_size_idx", len(THUMB_STEPS) - 1)) if parent is not None else (len(THUMB_STEPS) - 1)
-        except Exception:
-            default_idx = len(THUMB_STEPS) - 1
-        try:
-            saved_idx = int(getattr(parent, "_filmstrip_size_idx", default_idx)) if parent is not None else default_idx
-        except Exception:
-            saved_idx = default_idx
-        self._size_idx = max(0, min(len(THUMB_STEPS) - 1, (saved_idx if remember else default_idx)))
+        # 기본: 최대 썸네일 단계 사용 (가장 크게 보이도록)
+        self._size_idx = len(THUMB_STEPS) - 1
         # 품질/경로는 부모 뷰어 설정을 반영
         try:
             parent_q = int(getattr(parent, "_thumb_cache_quality", 85)) if parent is not None else 85
@@ -520,26 +380,7 @@ class FilmstripView(QListView):
             parent_root = str(getattr(parent, "_thumb_cache_dir", "")) if parent is not None else ""
         except Exception:
             parent_root = ""
-        # 캐시 관리 옵션
-        try:
-            _max_mb = int(getattr(parent, "_thumb_cache_max_mb", 0)) if parent is not None else 0
-        except Exception:
-            _max_mb = 0
-        try:
-            _gc_min = int(getattr(parent, "_thumb_cache_gc_interval_min", 0)) if parent is not None else 0
-        except Exception:
-            _gc_min = 0
-        try:
-            _prune_days = int(getattr(parent, "_thumb_cache_prune_days", 0)) if parent is not None else 0
-        except Exception:
-            _prune_days = 0
-        self._cache = ThumbCache(
-            quality=parent_q,
-            root_dir=(parent_root or None),
-            max_mb=_max_mb,
-            gc_interval_s=(max(0, _gc_min) * 60),
-            prune_days=_prune_days,
-        )
+        self._cache = ThumbCache(quality=parent_q, root_dir=(parent_root or None))
         self._pool = QThreadPool.globalInstance()
         self._model = FilmstripModel(self._cache, self._pool, self._target_size, self._current_dpr)
         self._delegate = FilmstripDelegate(self._target_size, self)
@@ -581,44 +422,6 @@ class FilmstripView(QListView):
 
         # 내부 선택 변경 신호 억제 가드 (프로그램적 갱신 루프 방지)
         self._suppress_signal = False
-        # 스타일/툴팁/레이아웃 옵션(부모 설정 반영)
-        try:
-            self._item_h_margin = int(getattr(parent, "_filmstrip_item_h_margin", 12)) if parent is not None else 12
-        except Exception:
-            self._item_h_margin = 12
-        try:
-            self._item_v_margin = int(getattr(parent, "_filmstrip_item_v_margin", 14)) if parent is not None else 14
-        except Exception:
-            self._item_v_margin = 14
-        try:
-            self._filmstrip_border_thickness = int(getattr(parent, "_filmstrip_border_thickness", 3)) if parent is not None else 3
-        except Exception:
-            self._filmstrip_border_thickness = 3
-        try:
-            self._filmstrip_border_color = str(getattr(parent, "_filmstrip_border_color", "#4DA3FF")) if parent is not None else "#4DA3FF"
-        except Exception:
-            self._filmstrip_border_color = "#4DA3FF"
-        try:
-            self._filmstrip_show_separator = bool(getattr(parent, "_filmstrip_show_separator", True)) if parent is not None else True
-        except Exception:
-            self._filmstrip_show_separator = True
-        try:
-            self._filmstrip_tt_name = bool(getattr(parent, "_filmstrip_tt_name", True)) if parent is not None else True
-        except Exception:
-            self._filmstrip_tt_name = True
-        try:
-            self._filmstrip_tt_res = bool(getattr(parent, "_filmstrip_tt_res", False)) if parent is not None else False
-        except Exception:
-            self._filmstrip_tt_res = False
-        try:
-            self._filmstrip_tt_rating = bool(getattr(parent, "_filmstrip_tt_rating", False)) if parent is not None else False
-        except Exception:
-            self._filmstrip_tt_rating = False
-        try:
-            self._max_height_cap = int(getattr(parent, "_filmstrip_max_height_cap", 0)) if parent is not None else 0
-        except Exception:
-            self._max_height_cap = 0
-        self._only_mode = False
 
     def _target_size(self) -> int:
         return THUMB_STEPS[self._size_idx]
@@ -637,19 +440,7 @@ class FilmstripView(QListView):
             pass
 
     def _update_fixed_height(self):
-        # 여백 기반 높이 산출
-        try:
-            v_margin = int(getattr(self, "_item_v_margin", 14))
-        except Exception:
-            v_margin = 14
-        h = self._target_size() + max(0, v_margin) * 2 + 4
-        # 전용 모드가 아니면 높이 상한을 적용
-        try:
-            cap = int(getattr(self, "_max_height_cap", 0))
-        except Exception:
-            cap = 0
-        if not bool(getattr(self, "_only_mode", False)) and int(cap) > 0:
-            h = min(int(h), int(cap))
+        h = self._target_size() + 28 + 4
         try:
             # 자유 조절 허용: 최대 높이만 제한 (썸네일 최대 높이 초과 금지)
             self.setMaximumHeight(h)
@@ -657,47 +448,6 @@ class FilmstripView(QListView):
             self.setMinimumHeight(48)
         except Exception:
             self.setFixedHeight(h)
-
-    # 외부에서 크기 단계 직접 제어(단축키/설정 적용)
-    def increase_size_step(self) -> None:
-        self._size_idx = min(self._size_idx + 1, len(THUMB_STEPS) - 1)
-        try:
-            parent = self.parent()
-            if parent is not None:
-                setattr(parent, "_filmstrip_size_idx", int(self._size_idx))
-        except Exception:
-            pass
-        self._update_fixed_height()
-        try:
-            self.viewport().update()
-        except Exception:
-            pass
-
-    def decrease_size_step(self) -> None:
-        self._size_idx = max(self._size_idx - 1, 0)
-        try:
-            parent = self.parent()
-            if parent is not None:
-                setattr(parent, "_filmstrip_size_idx", int(self._size_idx))
-        except Exception:
-            pass
-        self._update_fixed_height()
-        try:
-            self.viewport().update()
-        except Exception:
-            pass
-
-    # 전용 표시 모드에서 높이를 최대화/복원
-    def maximize_height_for_only_mode(self, enable: bool, max_height: Optional[int] = None) -> None:
-        self._only_mode = bool(enable)
-        try:
-            if enable and isinstance(max_height, int) and max_height > 0:
-                self.setMaximumHeight(int(max_height))
-                self.setMinimumHeight(min(64, int(max_height)))
-            else:
-                self._update_fixed_height()
-        except Exception:
-            pass
 
     def adjust_thumbnail_step_for_height(self, container_height: int) -> None:
         try:

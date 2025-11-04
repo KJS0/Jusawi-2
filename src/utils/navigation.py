@@ -42,8 +42,7 @@ class NavigationController:
                 viewer.load_image_at_current_index()
                 # 이동 후 필름스트립 중앙 정렬
                 try:
-                    mode = str(getattr(viewer, '_filmstrip_scroll_mode', 'always'))
-                    if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None and mode != 'off':
+                    if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None and bool(getattr(viewer, '_filmstrip_auto_center', True)):
                         viewer.filmstrip.set_current_index(viewer.current_image_index)
                         try:
                             from PyQt6.QtWidgets import QAbstractItemView  # type: ignore[import]
@@ -61,8 +60,7 @@ class NavigationController:
         viewer.load_image_at_current_index()
         # 이동 후 필름스트립 중앙 정렬
         try:
-            mode = str(getattr(viewer, '_filmstrip_scroll_mode', 'always'))
-            if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None and mode != 'off':
+            if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None and bool(getattr(viewer, '_filmstrip_auto_center', True)):
                 viewer.filmstrip.set_current_index(viewer.current_image_index)
                 try:
                     from PyQt6.QtWidgets import QAbstractItemView  # type: ignore[import]
@@ -88,8 +86,7 @@ class NavigationController:
                 viewer.load_image_at_current_index()
                 # 이동 후 필름스트립 중앙 정렬
                 try:
-                    mode = str(getattr(viewer, '_filmstrip_scroll_mode', 'always'))
-                    if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None and mode != 'off':
+                    if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None and bool(getattr(viewer, '_filmstrip_auto_center', True)):
                         viewer.filmstrip.set_current_index(viewer.current_image_index)
                         try:
                             from PyQt6.QtWidgets import QAbstractItemView  # type: ignore[import]
@@ -107,8 +104,7 @@ class NavigationController:
         viewer.load_image_at_current_index()
         # 이동 후 필름스트립 중앙 정렬
         try:
-            mode = str(getattr(viewer, '_filmstrip_scroll_mode', 'always'))
-            if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None and mode != 'off':
+            if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None and bool(getattr(viewer, '_filmstrip_auto_center', True)):
                 viewer.filmstrip.set_current_index(viewer.current_image_index)
                 try:
                     from PyQt6.QtWidgets import QAbstractItemView  # type: ignore[import]

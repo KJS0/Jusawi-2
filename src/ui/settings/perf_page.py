@@ -88,16 +88,6 @@ class PerformanceSettingsPage(SettingsPage):
         row_thumb.addRow("저장 위치", _h)
         root.addLayout(row_thumb)
 
-        # 썸네일 캐시 관리(용량/정리)
-        self.spin_thumb_max_mb = QSpinBox(self); self.spin_thumb_max_mb.setRange(0, 32768); self.spin_thumb_max_mb.setSuffix(" MB")
-        self.spin_thumb_gc_min = QSpinBox(self); self.spin_thumb_gc_min.setRange(0, 1440); self.spin_thumb_gc_min.setSuffix(" 분")
-        self.spin_thumb_prune_days = QSpinBox(self); self.spin_thumb_prune_days.setRange(0, 3650); self.spin_thumb_prune_days.setSuffix(" 일")
-        row_thumb2 = QFormLayout()
-        row_thumb2.addRow("최대 용량", self.spin_thumb_max_mb)
-        row_thumb2.addRow("정리 주기", self.spin_thumb_gc_min)
-        row_thumb2.addRow("오래된 항목 정리", self.spin_thumb_prune_days)
-        root.addLayout(row_thumb2)
-
         # 지능형 스케일 프리젠
         root.addWidget(QLabel("지능형 스케일 프리젠", self))
         self.chk_pregen_scales = QCheckBox("선호 배율 미리 생성", self)
@@ -241,18 +231,6 @@ class PerformanceSettingsPage(SettingsPage):
         except Exception:
             self.ed_thumb_dir.setText("")
         try:
-            self.spin_thumb_max_mb.setValue(int(getattr(viewer, "_thumb_cache_max_mb", 0)))
-        except Exception:
-            self.spin_thumb_max_mb.setValue(0)
-        try:
-            self.spin_thumb_gc_min.setValue(int(getattr(viewer, "_thumb_cache_gc_interval_min", 0)))
-        except Exception:
-            self.spin_thumb_gc_min.setValue(0)
-        try:
-            self.spin_thumb_prune_days.setValue(int(getattr(viewer, "_thumb_cache_prune_days", 0)))
-        except Exception:
-            self.spin_thumb_prune_days.setValue(0)
-        try:
             self.chk_pregen_scales.setChecked(bool(getattr(viewer, "_pregen_scales_enabled", False)))
         except Exception:
             self.chk_pregen_scales.setChecked(False)
@@ -374,12 +352,6 @@ class PerformanceSettingsPage(SettingsPage):
         try:
             viewer._thumb_cache_quality = int(self.spin_thumb_quality.value())
             viewer._thumb_cache_dir = str(self.ed_thumb_dir.text()).strip()
-        except Exception:
-            pass
-        try:
-            viewer._thumb_cache_max_mb = int(self.spin_thumb_max_mb.value())
-            viewer._thumb_cache_gc_interval_min = int(self.spin_thumb_gc_min.value())
-            viewer._thumb_cache_prune_days = int(self.spin_thumb_prune_days.value())
         except Exception:
             pass
         try:

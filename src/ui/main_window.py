@@ -661,81 +661,6 @@ class JusawiViewer(QMainWindow):
         """창 제목 업데이트"""
         ts_update_window_title(self, file_path)
 
-    # ----- 필름스트립 관련 명령 -----
-    def focus_filmstrip(self):
-        try:
-            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
-                self.filmstrip.setFocus()
-        except Exception:
-            pass
-
-    def filmstrip_zoom_in(self):
-        try:
-            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
-                self.filmstrip.increase_size_step()
-        except Exception:
-            pass
-
-    def filmstrip_zoom_out(self):
-        try:
-            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
-                self.filmstrip.decrease_size_step()
-        except Exception:
-            pass
-
-    def toggle_filmstrip_only(self):
-        try:
-            cur = bool(getattr(self, '_filmstrip_only_mode', False))
-        except Exception:
-            cur = False
-        new_mode = not cur
-        try:
-            self._filmstrip_only_mode = bool(new_mode)
-        except Exception:
-            pass
-        # UI 요소 토글
-        try:
-            if hasattr(self, 'button_bar') and self.button_bar is not None:
-                self.button_bar.setVisible(not new_mode)
-        except Exception:
-            pass
-        try:
-            if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
-                self._rating_flag_bar.setVisible(not new_mode)
-        except Exception:
-            pass
-        try:
-            if hasattr(self, 'image_display_area') and self.image_display_area is not None:
-                self.image_display_area.setVisible(not new_mode)
-        except Exception:
-            pass
-        try:
-            self.statusBar().setVisible(not new_mode)
-        except Exception:
-            pass
-        # 필름스트립 높이 최대화/복원
-        try:
-            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
-                h = int(self.height())
-                self.filmstrip.setVisible(True)
-                self.filmstrip.maximize_height_for_only_mode(bool(new_mode), h)
-                try:
-                    self.filmstrip.raise_()
-                except Exception:
-                    pass
-                try:
-                    self.filmstrip.updateGeometry(); self.filmstrip.repaint()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        # 포커스는 필름스트립으로
-        try:
-            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
-                self.filmstrip.setFocus()
-        except Exception:
-            pass
-
     # ----- 변환 상태 관리 -----
     def _apply_transform_to_view(self):
         return transform_ui.apply_transform_to_view(self)
@@ -1719,8 +1644,7 @@ class JusawiViewer(QMainWindow):
                     # 자동 스크롤(중앙 정렬) — 설정에 따라 수행
                     self.filmstrip.set_current_index(row)
                     try:
-                        mode = str(getattr(self, "_filmstrip_scroll_mode", "always"))
-                        if mode != "off":
+                        if bool(getattr(self, "_filmstrip_auto_center", True)):
                             from PyQt6.QtWidgets import QAbstractItemView  # type: ignore[import]
                             idx = self.filmstrip.model().index(row, 0)
                             self.filmstrip.scrollTo(idx, QAbstractItemView.ScrollHint.PositionAtCenter)
