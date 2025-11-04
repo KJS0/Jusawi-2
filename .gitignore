@@ -57,3 +57,6 @@ desktop.ini
 
 # Config files
 config.yaml
+
+# models
+models/

@@ -3,11 +3,24 @@ from __future__ import annotations
 import os
 import sqlite3
 import json
+import math
 from typing import List, Tuple, Optional, Dict, Any
 
 from ..utils.logging_setup import get_logger
 
 _log = get_logger("svc.OnlineSearch")
+
+try:
+    from sentence_transformers import SentenceTransformer  # type: ignore
+    _HAS_ST = True
+except Exception:
+    SentenceTransformer = None  # type: ignore
+    _HAS_ST = False
+
+try:
+    from PIL import Image  # type: ignore
+except Exception:
+    Image = None  # type: ignore
 
 
 def _read_vec(b: bytes) -> List[float]:
