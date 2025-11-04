@@ -1552,14 +1552,22 @@ class JusawiViewer(QMainWindow):
                 def _bg_index():
                     try:
                         from ..services.online_search_service import OnlineEmbeddingIndex  # type: ignore
-                        idx = OnlineEmbeddingIndex()
-                        idx.ensure_index(files[:max(1, int(maxn))], progress_cb=None)
-                        # 태그 가중치 환경 반영
                         try:
-                            import os as _os
-                            _os.environ["SEARCH_TAG_WEIGHT"] = str(int(getattr(self, "_search_tag_weight", 2)))
+                            model_dir = str(getattr(self, "_search_clip_model_dir"))
+                            if not model_dir:
+                                model_dir = None
                         except Exception:
-                            pass
+                            model_dir = None
+                        try:
+                            tag_weight = int(getattr(self, "_search_tag_weight", 2))
+                        except Exception:
+                            tag_weight = 2
+                        try:
+                            image_batch = int(getattr(self, "_embed_batch_size", 32))
+                        except Exception:
+                            image_batch = 32
+                        idx = OnlineEmbeddingIndex(model_path=model_dir, tag_weight=tag_weight, image_batch=image_batch)
+                        idx.ensure_index(files[:max(1, int(maxn))], progress_cb=None)
                     except Exception:
                         pass
                 if Thread is not None:

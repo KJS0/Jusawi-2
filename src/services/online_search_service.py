@@ -90,31 +90,93 @@ def _build_doc_for_image(path: str) -> str:
 
 
 class OnlineEmbeddingIndex:
-    """OpenAI 임베딩으로 로컬 이미지 컬렉션을 색인/검색.
+    """M-CLIP 기반 자연어 → 이미지 검색 인덱스."""
 
-    - 임베딩 모델: env EMBED_MODEL (기본: text-embedding-3-small)
-    - DB: ~/.jusawi/online_embed.sqlite3
-    - 벡터 저장 형식: CSV float 문자열(bytes)
-    """
+    _DEFAULT_MODEL_NAME = "M-CLIP/XLM-Roberta-Large-Vit-B-32"
 
-    def __init__(self, model: str | None = None, api_key: str | None = None, tag_weight: int | None = None, verify_model: str | None = None):
+    def __init__(
+        self,
+        model_path: str | None = None,
+        tag_weight: int | None = None,
+        image_batch: int | None = None,
+        text_batch: int | None = None,
+    ) -> None:
+        if not _HAS_ST:
+            raise RuntimeError("sentence-transformers 패키지를 설치해야 자연어 검색을 사용할 수 있습니다.")
+
         base_dir = os.path.join(os.path.expanduser("~"), ".jusawi")
         try:
             os.makedirs(base_dir, exist_ok=True)
         except Exception:
             pass
+
         self._db_path = os.path.join(base_dir, "online_embed.sqlite3")
-        self._model = (model or "text-embedding-3-small").strip() or "text-embedding-3-small"
-        self._api_key = api_key or None
+        self._requested_model_path = model_path
+        self._model: SentenceTransformer | None = None
+        self._model_source: Optional[str] = None
+        self._model_signature = f"mclip::{self._DEFAULT_MODEL_NAME}"
+
         try:
-            self._tag_weight = int(tag_weight if tag_weight is not None else 2)
+            self._tag_weight = float(tag_weight if tag_weight is not None else 2.0)
         except Exception:
-            self._tag_weight = 2
+            self._tag_weight = 2.0
+        if self._tag_weight < 0:
+            self._tag_weight = 0.0
+
         try:
-            self._verify_model = str(verify_model or "gpt-4o-mini")
+            self._image_batch_size = max(1, int(image_batch if image_batch is not None else 24))
         except Exception:
-            self._verify_model = "gpt-4o-mini"
+            self._image_batch_size = 24
+
+        try:
+            self._text_batch_size = max(1, int(text_batch if text_batch is not None else 64))
+        except Exception:
+            self._text_batch_size = 64
+
         self._ensure_db()
+
+    # ------------------------------------------------------------------
+    # 모델 및 저장소 관리
+    # ------------------------------------------------------------------
+    def _resolve_model_path(self) -> str:
+        # 1) 호출 시 지정된 경로
+        if self._requested_model_path and os.path.isdir(self._requested_model_path):
+            return self._requested_model_path
+
+        # 2) 환경 변수
+        env_path = os.getenv("JUSAWI_MCLIP_MODEL")
+        if env_path and os.path.isdir(env_path):
+            self._requested_model_path = env_path
+            return env_path
+
+        # 3) 리포지토리 내 기본 경로 후보
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        candidates = [
+            os.path.join(repo_root, "models", "M-CLIP-XLMR-L-ViT-B-32"),
+            os.path.join(repo_root, "models", "M-CLIP-XLM-Roberta-Large-Vit-B-32"),
+            os.path.join(repo_root, "models", "M-CLIP"),
+        ]
+        for cand in candidates:
+            if os.path.isdir(cand):
+                self._requested_model_path = cand
+                return cand
+
+        # 4) 모델 이름(허브에서 자동 다운로드)
+        return self._DEFAULT_MODEL_NAME
+
+    def _ensure_model(self) -> None:
+        if self._model is not None:
+            return
+        if not _HAS_ST:
+            raise RuntimeError("sentence-transformers 패키지를 찾을 수 없습니다.")
+        source = self._resolve_model_path()
+        self._model = SentenceTransformer(source)  # type: ignore[arg-type]
+        self._model_source = source
+        if os.path.isdir(source):
+            base = os.path.basename(source.rstrip(os.sep))
+            self._model_signature = f"mclip::{base}"
+        else:
+            self._model_signature = f"mclip::{source}"
 
     def _ensure_db(self) -> None:
         con = sqlite3.connect(self._db_path)
@@ -132,7 +194,6 @@ class OnlineEmbeddingIndex:
                 )
                 """
             )
-            # AI 태그/주제 저장 테이블(+캡션 컬럼 포함)
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tags (
@@ -144,7 +205,6 @@ class OnlineEmbeddingIndex:
                 )
                 """
             )
-            # 마이그레이션: 기존 DB에 누락 컬럼 추가(이미 있으면 무시)
             try:
                 cur.execute("ALTER TABLE tags ADD COLUMN short_caption TEXT")
             except Exception:
@@ -158,84 +218,178 @@ class OnlineEmbeddingIndex:
         finally:
             con.close()
 
+    # ------------------------------------------------------------------
+    # 임베딩 유틸리티
+    # ------------------------------------------------------------------
     def _get_mtime(self, path: str) -> int:
         try:
             return int(os.path.getmtime(path))
         except Exception:
             return 0
 
-    def _embed_text_batch(self, texts: List[str]) -> List[List[float]]:
-        if not self._api_key:
-            raise RuntimeError("OPENAI_API_KEY 없음")
+    def _embed_texts(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+        self._ensure_model()
         try:
-            from openai import OpenAI  # type: ignore
-        except Exception as e:
-            raise RuntimeError(f"openai SDK 로드 실패: {e}")
-        # 임베딩 호출 타임아웃 상향(네트워크 지연 대응)
-        client = OpenAI(api_key=self._api_key, timeout=30.0)
-        # OpenAI Embeddings API: 최대 입력 길이에 주의(안전하게 batch로 처리)
-        resp = client.embeddings.create(model=self._model, input=texts)
-        out: List[List[float]] = []
-        for item in resp.data:
-            out.append(list(item.embedding))
-        return out
+            batch = min(self._text_batch_size, max(1, len(texts)))
+        except Exception:
+            batch = max(1, len(texts))
+        arr = self._model.encode(  # type: ignore[union-attr]
+            texts,
+            batch_size=batch,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )
+        return [[float(x) for x in vec.tolist()] for vec in arr]
 
-    def ensure_index(self, image_paths: List[str], progress_cb=None, batch_size: int | None = None, is_cancelled=None) -> int:
-        """경로 목록에 대해 누락/구버전 임베딩을 생성해 저장. 반환: 새로 생성한 개수."""
-        pending: List[Tuple[str, str, int]] = []  # (path, doc, mtime)
+    def _embed_images(self, paths: List[str]) -> List[Optional[List[float]]]:
+        outputs: List[Optional[List[float]]] = [None] * len(paths)
+        if Image is None:
+            return outputs
+        if not paths:
+            return outputs
+
+        self._ensure_model()
+        loaded_images = []
+        indices = []
+        for idx, path in enumerate(paths):
+            try:
+                with Image.open(path) as im:  # type: ignore[arg-type]
+                    img = im.convert("RGB").copy()
+                loaded_images.append(img)
+                indices.append(idx)
+            except Exception:
+                continue
+
+        if not loaded_images:
+            return outputs
+
+        try:
+            batch = min(self._image_batch_size, max(1, len(loaded_images)))
+        except Exception:
+            batch = max(1, len(loaded_images))
+
+        try:
+            arr = self._model.encode(  # type: ignore[union-attr]
+                images=loaded_images,
+                batch_size=batch,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )
+            for idx, vec in zip(indices, arr):
+                outputs[idx] = [float(x) for x in vec.tolist()]
+        finally:
+            for img in loaded_images:
+                try:
+                    img.close()
+                except Exception:
+                    pass
+
+        return outputs
+
+    def _combine_vectors(self, base: Optional[List[float]], meta: Optional[List[float]]) -> List[float]:
+        if not base:
+            return []
+        if not meta or len(base) != len(meta):
+            return [float(x) for x in base]
+        # 태그 가중치를 0~1 범위로 변환(기본 0.5)
+        weight = max(0.0, min(1.0, 0.25 * self._tag_weight))
+        if weight <= 0.0:
+            return [float(x) for x in base]
+        combined = [float((1.0 - weight) * a + weight * b) for a, b in zip(base, meta)]
+        norm = math.sqrt(sum(x * x for x in combined))
+        if norm > 0:
+            return [float(x / norm) for x in combined]
+        return [float(x) for x in base]
+
+    # ------------------------------------------------------------------
+    # 색인 & 검색
+    # ------------------------------------------------------------------
+    def ensure_index(
+        self,
+        image_paths: List[str],
+        progress_cb=None,
+        batch_size: int | None = None,
+        is_cancelled=None,
+    ) -> int:
+        pending: List[Tuple[str, str, int]] = []
         con = sqlite3.connect(self._db_path)
         try:
             cur = con.cursor()
-            for p in image_paths:
-                mt = self._get_mtime(p)
+            for path in image_paths:
+                mt = self._get_mtime(path)
                 try:
-                    cur.execute("SELECT mtime, model FROM vectors WHERE path=?", (p,))
+                    cur.execute("SELECT mtime, model FROM vectors WHERE path=?", (path,))
                     row = cur.fetchone()
                 except Exception:
                     row = None
-                need = True
+                need_update = True
                 if row is not None:
                     try:
                         prev_mtime = int(row[0])
                         prev_model = str(row[1] or "")
-                        if prev_mtime == mt and prev_model == self._model:
-                            need = False
-                        else:
-                            need = True
+                        if prev_mtime == mt and prev_model == self._model_signature:
+                            need_update = False
                     except Exception:
-                        need = True
-                if need:
-                    doc = self._build_doc_with_tags(p)
-                    pending.append((p, doc, mt))
+                        need_update = True
+                if need_update:
+                    pending.append((path, self._build_doc_with_tags(path), mt))
         finally:
             con.close()
 
-        created = 0
         if not pending:
-            return created
-        # 배치 단위로 임베딩
-        B = int(batch_size if batch_size is not None else int(os.getenv("EMBED_BATCH", "64") or 64))
+            return 0
+
+        created = 0
+        try:
+            batch = int(batch_size if batch_size is not None else self._image_batch_size)
+        except Exception:
+            batch = self._image_batch_size
+
+        total = len(pending)
         i = 0
-        while i < len(pending):
+        while i < total:
             if callable(is_cancelled) and is_cancelled():
                 break
-            chunk = pending[i : i + B]
-            texts = [d for (_, d, __) in chunk]
+            chunk = pending[i : i + batch]
+            paths = [item[0] for item in chunk]
+            docs = [item[1] for item in chunk]
             if progress_cb:
                 try:
-                    progress_cb(min(90, int(100 * (i / max(1, len(pending))))), f"임베딩 {i+1}-{min(i+B, len(pending))}/{len(pending)}")
+                    progress_cb(
+                        min(90, int(10 + 60 * (i / max(1, total)))),
+                        f"이미지 임베딩 {i + 1}-{min(i + batch, total)}/{total}",
+                    )
                 except Exception:
                     pass
-            vecs = self._embed_text_batch(texts)
+
+            img_vecs = self._embed_images(paths)
+            text_vecs = self._embed_texts(docs) if self._tag_weight > 0 else [None] * len(chunk)
+
             con = sqlite3.connect(self._db_path)
             try:
                 cur = con.cursor()
-                for (path, doc, mt), vec in zip(chunk, vecs):
+                for idx, (path, doc, mt) in enumerate(chunk):
+                    ivec = img_vecs[idx] if idx < len(img_vecs) else None
+                    if not ivec:
+                        continue
+                    tvec = text_vecs[idx] if idx < len(text_vecs) else None
+                    final_vec = self._combine_vectors(ivec, tvec)
+                    if not final_vec:
+                        continue
                     try:
                         cur.execute(
                             "INSERT INTO vectors(path, mtime, model, dim, vec, meta) VALUES(?,?,?,?,?,?) "
                             "ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, model=excluded.model, dim=excluded.dim, vec=excluded.vec, meta=excluded.meta",
-                            (path, mt, self._model, len(vec), _write_vec(vec), json.dumps({"doc": doc}, ensure_ascii=False)),
+                            (
+                                path,
+                                mt,
+                                self._model_signature,
+                                len(final_vec),
+                                _write_vec(final_vec),
+                                json.dumps({"doc": doc}, ensure_ascii=False),
+                            ),
                         )
                         created += 1
                     except Exception:
@@ -243,12 +397,12 @@ class OnlineEmbeddingIndex:
                 con.commit()
             finally:
                 con.close()
-            i += B
+            i += batch
+
         return created
 
     def _build_doc_with_tags(self, path: str) -> str:
         base = _build_doc_for_image(path)
-        # tags 테이블에서 불러와 결합
         try:
             con = sqlite3.connect(self._db_path)
             try:
@@ -262,8 +416,7 @@ class OnlineEmbeddingIndex:
                     lc = str(row[3] or "").strip()
                     parts = [base]
                     if t:
-                        w = max(1, min(5, int(getattr(self, "_tag_weight", 2))))
-                        parts.append("tags: " + ",".join([t] * w))
+                        parts.append("tags: " + t)
                     if s:
                         parts.append("subjects: " + s)
                     if sc:
@@ -277,8 +430,14 @@ class OnlineEmbeddingIndex:
             pass
         return base
 
-    def upsert_tags_subjects(self, path: str, tags: List[str] | None, subjects: List[str] | None,
-                              short_caption: Optional[str] = None, long_caption: Optional[str] = None) -> None:
+    def upsert_tags_subjects(
+        self,
+        path: str,
+        tags: List[str] | None,
+        subjects: List[str] | None,
+        short_caption: Optional[str] = None,
+        long_caption: Optional[str] = None,
+    ) -> None:
         if not path:
             return
         t = ",".join([str(x) for x in (tags or []) if str(x).strip()])
@@ -300,13 +459,15 @@ class OnlineEmbeddingIndex:
         out: List[Tuple[str, List[float]]] = []
         try:
             cur = con.cursor()
-            qmarks = ",".join(["?"] * len(image_paths)) if image_paths else ""
-            if not qmarks:
+            if not image_paths:
                 return []
-            cur.execute(f"SELECT path, dim, vec FROM vectors WHERE path IN ({qmarks}) AND model=?", (*image_paths, self._model))
+            qmarks = ",".join(["?"] * len(image_paths))
+            cur.execute(
+                f"SELECT path, dim, vec FROM vectors WHERE path IN ({qmarks}) AND model=?",
+                (*image_paths, self._model_signature),
+            )
             for row in cur.fetchall():
                 path = str(row[0])
-                # dim = int(row[1])  # 미사용
                 vec = _read_vec(row[2])
                 if vec:
                     out.append((path, vec))
@@ -316,206 +477,73 @@ class OnlineEmbeddingIndex:
             con.close()
         return out
 
-    def search(self,
-               image_paths: List[str],
-               query_text: str,
-               top_k: int = 50,
-               verify_top_n: int = 20,
-               verify_mode: str = "normal",
-               progress_cb=None,
-               use_embedding: bool | None = None,
-               strict_only_opt: bool | None = None,
-               verify_max_candidates: int | None = None,
-               verify_workers_opt: int | None = None,
-               blend_alpha_opt: float | None = None,
-               embed_batch_size: int | None = None,
-               is_cancelled=None) -> List[Tuple[str, float]]:
+    def search(
+        self,
+        image_paths: List[str],
+        query_text: str,
+        top_k: int | None = None,
+        progress_cb=None,
+        is_cancelled=None,
+    ) -> List[Tuple[str, float]]:
         if not query_text.strip():
             return []
+
         if progress_cb:
             try:
                 progress_cb(5, "색인 확인")
             except Exception:
                 pass
-        # 임베딩 사용 여부: 기본 사용(True). 매개변수로만 제어
-        no_embed = (False if use_embedding is None else (not bool(use_embedding)))
-        strict_only = True if strict_only_opt is None else bool(strict_only_opt)
-        # 검증 모드 기본값: strict
-        vm = (verify_mode or "").strip().lower()
-        if vm not in ("loose", "normal", "strict"):
-            vm = "strict"
-        if no_embed:
-            if progress_cb:
-                try:
-                    progress_cb(20, "임베딩 생략: 후보 수집")
-                except Exception:
-                    pass
+
+        self.ensure_index(image_paths, progress_cb=progress_cb, is_cancelled=is_cancelled)
+
+        if callable(is_cancelled) and is_cancelled():
+            return []
+
+        if progress_cb:
             try:
-                verify_cap = int(verify_max_candidates if verify_max_candidates is not None else 200)
+                progress_cb(35, "질의 임베딩")
             except Exception:
-                verify_cap = 200
-            verify_cap = max(1, verify_cap)
-            cands = list(image_paths)[:verify_cap]
-            scored: List[Tuple[str, float]] = [(p, 0.0) for p in cands]
-            top_k = len(scored)
-            verify_top_n = len(scored)
-        else:
-            # 캐시를 사용하지 않고, 매 검색마다 전체 파일 임베딩을 새로 생성하여 코사인 유사도 계산
-            if callable(is_cancelled) and is_cancelled():
-                return []
-            if progress_cb:
-                try:
-                    progress_cb(20, "질의 임베딩")
-                except Exception:
-                    pass
-            qvec = self._embed_text_batch([query_text])[0]
-            if callable(is_cancelled) and is_cancelled():
-                return []
-            # 이미지 문서 생성 → 배치 임베딩(신규 생성, DB 미저장)
+                pass
+
+        qvecs = self._embed_texts([query_text])
+        if not qvecs:
+            return []
+        qvec = qvecs[0]
+
+        if callable(is_cancelled) and is_cancelled():
+            return []
+
+        if progress_cb:
             try:
-                B = int(embed_batch_size if embed_batch_size is not None else 128)
+                progress_cb(55, "벡터 로드")
             except Exception:
-                B = 128
-            docs: List[Tuple[str, str]] = [(p, self._build_doc_with_tags(p)) for p in image_paths]
-            embed_map_vec: Dict[str, List[float]] = {}
-            i = 0
-            total = len(docs)
-            while i < total:
-                if callable(is_cancelled) and is_cancelled():
-                    return []
-                chunk = docs[i : i + B]
-                texts = [d for (_, d) in chunk]
-                if progress_cb:
-                    try:
-                        progress_cb(30 + int(25 * (i / max(1, total))), f"이미지 임베딩 {i+1}-{min(i+B, total)}/{total}")
-                    except Exception:
-                        pass
-                # 임베딩 재시도 로직(부분 실패 시 배치 분할 → 단건 폴백)
-                def _embed_with_retry(in_texts: List[str]) -> List[List[float]]:
-                    attempts = 0
-                    cur_texts = in_texts
-                    cur_batch = len(cur_texts)
-                    while attempts < 3:
-                        attempts += 1
-                        try:
-                            out_vecs = self._embed_text_batch(cur_texts)
-                            if len(out_vecs) == len(cur_texts):
-                                return out_vecs
-                        except Exception:
-                            pass
-                        # 배치 반으로 줄여 재시도
-                        if cur_batch > 1:
-                            cur_batch = max(1, cur_batch // 2)
-                            cur_texts = in_texts[:cur_batch]
-                        else:
-                            break
-                    # 단건 폴백
-                    out: List[List[float]] = []
-                    for t in in_texts:
-                        try:
-                            v = self._embed_text_batch([t])[0]
-                        except Exception:
-                            v = []
-                        out.append(v)
-                    return out
+                pass
 
-                vecs = _embed_with_retry(texts)
-                # vecs 길이 보정(부족분 0-벡터)
-                if len(vecs) < len(texts):
-                    diff = len(texts) - len(vecs)
-                    vecs.extend([[] for _ in range(diff)])
-                for (path, _), vec in zip(chunk, vecs):
-                    if vec:
-                        embed_map_vec[path] = vec
-                i += B
-            if progress_cb:
-                try:
-                    progress_cb(60, "코사인 유사도 계산")
-                except Exception:
-                    pass
-            # 코사인 점수 산출
-            scored = []
-            for p in image_paths:
-                v = embed_map_vec.get(p)
-                c = _cosine(qvec, v) if v else 0.0
-                scored.append((p, float(max(0.0, c))))
-            # 전수 재검증(전체 후보)
-            verify_top_n = len(scored)
-            scored.sort(key=lambda x: x[1], reverse=True)
+        vec_map = {p: v for p, v in self._load_all_vectors(image_paths)}
 
-        # 2차 재검증을 생략하고, 임베딩 이후 바로 3차 바이너리 필터만 수행
-        if scored:
-            if progress_cb:
-                try:
-                    progress_cb(75, "최종 필터링")
-                except Exception:
-                    pass
+        if progress_cb:
             try:
-                from .verifier_service import VerifierService  # type: ignore
-                verifier = VerifierService(api_key=self._api_key, model=getattr(self, "_verify_model", "gpt-5-nano"))
-                # 병렬 워커 수 설정
-                try:
-                    workers = int(verify_workers_opt if verify_workers_opt is not None else 64)
-                except Exception:
-                    workers = 64
-                workers = max(1, min(64, workers))
-                try:
-                    import concurrent.futures as _fut
-                except Exception:
-                    _fut = None  # type: ignore
+                progress_cb(70, "유사도 계산")
+            except Exception:
+                pass
 
-                # 전체 후보에 대해 이미지당 단일 요청으로 바이너리 판정 수행
-                n = len(scored)
-                final: List[Tuple[str, float]] = []
-                tasks: List[Tuple[int, str]] = [(i, scored[i][0]) for i in range(n)]
-                if _fut is not None and workers > 1:
-                    with _fut.ThreadPoolExecutor(max_workers=workers) as ex:
-                        fut_to_idx = {
-                            ex.submit(verifier.verify_binary, path, query_text): idx for idx, path in tasks
-                        }
-                        done = 0
-                        for fut in _fut.as_completed(fut_to_idx):
-                            if callable(is_cancelled) and is_cancelled():
-                                break
-                            idx = fut_to_idx[fut]
-                            path = scored[idx][0]
-                            try:
-                                r = fut.result()
-                                if bool(r.get("match", r.get("ok", False))):
-                                    conf = float(r.get("confidence", 0.0))
-                                    final.append((path, conf))
-                            except Exception:
-                                pass
-                            done += 1
-                            if progress_cb:
-                                try:
-                                    base = 75
-                                    span = 20
-                                    progress_cb(base + int(span * (done / max(1, n))), "최종 필터링")
-                                except Exception:
-                                    pass
-                else:
-                    for i, path in tasks:
-                        if callable(is_cancelled) and is_cancelled():
-                            break
-                        r = verifier.verify_binary(path, query_text)
-                        if bool(r.get("match", r.get("ok", False))):
-                            conf = float(r.get("confidence", 0.0))
-                            final.append((path, conf))
-                        if progress_cb:
-                            try:
-                                base = 75
-                                span = 20
-                                progress_cb(base + int(span * ((i + 1) / max(1, n))), "최종 필터링")
-                            except Exception:
-                                pass
-                final.sort(key=lambda x: x[1], reverse=True)
-                return final
-            except Exception as e:
-                try:
-                    _log.warning("verify_bin_only_fail | err=%s", str(e))
-                except Exception:
-                    pass
+        scored: List[Tuple[str, float]] = []
+        for path in image_paths:
+            vec = vec_map.get(path)
+            score = _cosine(qvec, vec) if vec else 0.0
+            scored.append((path, float(max(0.0, score))))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        if top_k is not None and top_k > 0:
+            scored = scored[:min(top_k, len(scored))]
+
+        if progress_cb:
+            try:
+                progress_cb(100, "완료")
+            except Exception:
+                pass
+
         return scored
 
 

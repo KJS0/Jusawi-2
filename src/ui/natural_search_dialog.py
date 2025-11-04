@@ -21,26 +21,23 @@ class _SearchWorker(QObject):
     finished = pyqtSignal(list)
     failed = pyqtSignal(str)
 
-    def __init__(self, index: OnlineEmbeddingIndex, files: List[str], query: str, verify_mode: str, verify_top_n: int):
+    def __init__(self, index: OnlineEmbeddingIndex, files: List[str], query: str, top_k: int | None):
         super().__init__()
         self._index = index
         self._files = files
         self._query = query
-        self._vmode = verify_mode
-        self._vtop = int(max(0, verify_top_n))
+        self._top_k = top_k
         self._cancelled = False
 
-    def cancel(self):
+    def cancel(self) -> None:
         self._cancelled = True
 
-    def run(self):
+    def run(self) -> None:
         try:
             res = self._index.search(
                 image_paths=self._files,
                 query_text=self._query,
-                top_k=int(os.getenv("SEARCH_TOP_K", "80") or 80),
-                verify_top_n=self._vtop if self._vtop > 0 else int(os.getenv("SEARCH_VERIFY_TOP_N", "20") or 20),
-                verify_mode=(self._vmode or os.getenv("SEARCH_VERIFY_MODE", "normal") or "normal"),
+                top_k=self._top_k,
                 progress_cb=lambda p, m: self.progress.emit(int(p), str(m)),
                 is_cancelled=lambda: bool(self._cancelled),
             )
@@ -57,24 +54,21 @@ class NaturalSearchDialog(QDialog):
         # 뷰어 설정 기반 모델/키 전달
         try:
             viewer = parent
-            model = str(getattr(viewer, "_embed_model", "text-embedding-3-small")) if viewer is not None else None
         except Exception:
-            model = None
-        try:
-            api_key = str(getattr(viewer, "_ai_openai_api_key", "")) if viewer is not None else None
-            if api_key == "":
-                api_key = None
-        except Exception:
-            api_key = None
+            viewer = None
         try:
             tag_w = int(getattr(viewer, "_search_tag_weight", 2)) if viewer is not None else 2
         except Exception:
             tag_w = 2
         try:
-            vmodel = str(getattr(viewer, "_verify_model", "gpt-5-nano")) if viewer is not None else "gpt-5-nano"
+            image_batch = int(getattr(viewer, "_embed_batch_size", 32)) if viewer is not None else 32
         except Exception:
-            vmodel = "gpt-4o-mini"
-        self._index = OnlineEmbeddingIndex(model=model, api_key=api_key, tag_weight=tag_w, verify_model=vmodel)
+            image_batch = 32
+        try:
+            model_path = str(getattr(viewer, "_search_clip_model_dir")) if viewer is not None and getattr(viewer, "_search_clip_model_dir", "") else None
+        except Exception:
+            model_path = None
+        self._index = OnlineEmbeddingIndex(model_path=model_path, tag_weight=tag_w, image_batch=image_batch)
         self._thread: QThread | None = None
         self._worker: _SearchWorker | None = None
         self._pix_cache: dict[str, object] = {}
@@ -160,7 +154,7 @@ class NaturalSearchDialog(QDialog):
                     lay.setContentsMargins(16, 16, 16, 16)
                 except Exception:
                     pass
-                lbl = QLabel("검색 중 (응답이 없을 수 있습니다)", self)
+                lbl = QLabel("검색 중... (탐색 과정에서 시간이 걸릴 수 있습니다)", self)
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 lay.addWidget(lbl)
                 try:
@@ -225,58 +219,18 @@ class NaturalSearchDialog(QDialog):
         except Exception:
             pass
 
-        # 재검증 모드/상위 N 제거: 'normal' 고정, 상위 N은 내부에서 전체 후보로 확장
-        mode = "normal"
-        topn = -1
-
-        # 인덱스 런타임 설정 반영: 다이얼로그 쓰레드 내에서 적용되지만, 검색 파라미터는 worker 내부에서 사용
-        # OnlineEmbeddingIndex.search에 직접 전달할 설정값을 보관
+        self._thread = QThread(self)
         try:
             viewer = self.parent()
-            self._cfg_use_embedding = bool(getattr(viewer, "_search_use_embedding", True)) if viewer is not None else True
-            self._cfg_strict_only = bool(getattr(viewer, "_search_verify_strict_only", True)) if viewer is not None else True
-            self._cfg_verify_max = int(getattr(viewer, "_search_verify_max_candidates", 200)) if viewer is not None else 200
-            self._cfg_verify_workers = int(getattr(viewer, "_search_verify_workers", 16)) if viewer is not None else 16
-            self._cfg_blend_alpha = float(getattr(viewer, "_search_blend_alpha", 0.7)) if viewer is not None else 0.7
-            self._cfg_embed_batch = int(getattr(viewer, "_embed_batch_size", 64)) if viewer is not None else 64
+            tk = int(getattr(viewer, "_search_top_k", len(self._files))) if viewer is not None else len(self._files)
         except Exception:
-            self._cfg_use_embedding = True
-            self._cfg_strict_only = True
-            self._cfg_verify_max = 200
-            self._cfg_verify_workers = 16
-            self._cfg_blend_alpha = 0.7
-            self._cfg_embed_batch = 64
+            tk = len(self._files)
+        if tk <= 0:
+            tk = len(self._files)
 
-        self._thread = QThread(self)
-        self._worker = _SearchWorker(self._index, self._files, q, mode, topn)
+        self._worker = _SearchWorker(self._index, self._files, q, tk)
         self._worker.moveToThread(self._thread)
-        # Worker.run을 감싸서 설정 파라미터를 주입한 search 호출로 대체
-        def _run_with_cfg():
-            try:
-                lv = self.parent()
-                try:
-                    tk = int(getattr(lv, "_search_top_k", 80)) if lv is not None else 80
-                except Exception:
-                    tk = 80
-                res = self._index.search(
-                    image_paths=self._files,
-                    query_text=q,
-                    top_k=tk,
-                    verify_top_n=topn,
-                    verify_mode=mode,
-                    progress_cb=lambda p, m: self._worker.progress.emit(int(p), str(m)),
-                    use_embedding=self._cfg_use_embedding,
-                    strict_only_opt=self._cfg_strict_only,
-                    verify_max_candidates=self._cfg_verify_max,
-                    verify_workers_opt=self._cfg_verify_workers,
-                    blend_alpha_opt=self._cfg_blend_alpha,
-                    embed_batch_size=self._cfg_embed_batch,
-                )
-                self._worker.finished.emit(res)
-            except Exception as e:
-                self._worker.failed.emit(str(e))
-
-        self._thread.started.connect(_run_with_cfg)
+        self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
@@ -333,6 +287,10 @@ class NaturalSearchDialog(QDialog):
     def _cleanup_worker(self):
         try:
             if self._worker:
+                try:
+                    self._worker.cancel()
+                except Exception:
+                    pass
                 self._worker.deleteLater()
         except Exception:
             pass
