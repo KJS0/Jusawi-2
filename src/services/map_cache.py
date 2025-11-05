@@ -128,8 +128,8 @@ class MapFetchTask(QRunnable):
         if pm is None:
             try:
                 from .geocoding import get_static_map_png  # type: ignore
-                # 제공자 고정: Google
-                data = get_static_map_png(self.lat, self.lon, width=self.w, height=self.h, zoom=self.zoom, provider='google')
+                # 제공자 자동 선택(google→kakao→osm 폴백). provider 인자는 생략.
+                data = get_static_map_png(self.lat, self.lon, width=self.w, height=self.h, zoom=self.zoom)
                 if data:
                     pm2 = QPixmap()
                     if pm2.loadFromData(bytes(data)):

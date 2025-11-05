@@ -65,6 +65,7 @@ class AIConfig:
     api_key: str = ""
     # Behavior
     fast_mode: bool = False
+    offline_mode: bool = False
     exif_level: str = "full"  # full|summary|none (summary는 현재 full과 동치로 처리)
     retry_count: int = 1
     retry_delay_s: float = 0.8
@@ -366,11 +367,6 @@ def _preprocess_image_for_model(
 ) -> bytes | None:
     """이미지를 sRGB JPEG로 리사이즈/재압축해 바이트로 반환.
 
-    - 기본값은 환경변수로 제어 가능:
-      - AI_IMG_MAX_SIDE (기본 1024, 256~2048 범위)
-      - AI_IMG_MIN_SIDE (기본 512)
-      - AI_IMG_JPEG_QUALITY (기본 80, 40~95 범위)
-      - AI_IMG_TARGET_BYTES (기본 600000)
     - 크기 예산을 맞추기 위해 품질과 해상도를 점진적으로 낮춤(최대 6회 시도).
     - JPEG 옵션: optimize=True, progressive=True, subsampling=4:2:0.
     """
@@ -695,14 +691,19 @@ class AIAnalysisService:
                 return hashlib.sha1((p + "|stat").encode("utf-8")).hexdigest()
         try:
             content = _sha1_file(path)
-            fast = os.getenv("AI_FAST_MODE", "0")
+            fast = "1" if bool(getattr(self, "_cfg", AIConfig()).fast_mode) else "0"
             sig = f"{content}|{ctx.language}|{ctx.long_caption_chars}|{ctx.short_caption_words}|{ctx.purpose}|{ctx.tone}|{self._model}|fast={fast}"
             return hashlib.sha1(sig.encode("utf-8")).hexdigest()
         except Exception:
             return hashlib.sha1((path + "|fallback").encode("utf-8")).hexdigest()
 
     def _cache_path(self, key: str) -> str:
-        base = pathlib.Path(os.getenv("AI_CACHE_DIR", os.path.join(os.path.expanduser("~"), ".jusawi_ai_cache")))
+        try:
+            cfg = getattr(self, "_cfg", AIConfig())
+            base_dir = str(getattr(cfg, "cache_dir", os.path.join(os.path.expanduser("~"), ".jusawi_ai_cache")))
+        except Exception:
+            base_dir = os.path.join(os.path.expanduser("~"), ".jusawi_ai_cache")
+        base = pathlib.Path(base_dir)
         try:
             base.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -762,7 +763,7 @@ class AIAnalysisService:
     def _call_openai(self, image_bytes: bytes, prompt: str, context: AnalysisContext) -> Dict[str, Any]:
         # 오프라인 모드: 외부 호출 차단
         try:
-            if os.getenv("OFFLINE_MODE", "0") == "1":
+            if bool(getattr(self, "_cfg", AIConfig()).offline_mode):
                 raise RuntimeError("오프라인 모드")
         except Exception:
             pass

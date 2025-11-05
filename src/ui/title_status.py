@@ -1,5 +1,5 @@
 import os
-from ..utils.status_utils import human_readable_size, compute_display_bit_depth, describe_colorspace
+from ..utils.status_utils import human_readable_size
 
 
 def update_window_title(viewer, file_path=None) -> None:
@@ -22,7 +22,7 @@ def update_status_left(viewer) -> None:
         size_str = human_readable_size(size_bytes)
     except OSError:
         size_str = "-"
-    w = h = depth = 0
+    w = h = 0
     pix = viewer.image_display_area.originalPixmap()
     # 자연 해상도 우선 표기(다운샘플 표시 중에도 원본 해상도로 표기)
     try:
@@ -32,42 +32,12 @@ def update_status_left(viewer) -> None:
         nat_w = nat_h = 0
     if nat_w > 0 and nat_h > 0:
         w, h = nat_w, nat_h
-        try:
-            # 비트 심도는 현재 픽스맵으로 추정
-            if pix and not pix.isNull():
-                img = pix.toImage()
-                depth = compute_display_bit_depth(img)
-        except Exception:
-            depth = 0
     elif pix and not pix.isNull():
         w = pix.width()
         h = pix.height()
-        try:
-            img = pix.toImage()
-            depth = compute_display_bit_depth(img)
-        except Exception:
-            depth = 0
-    dims = f"{w}*{h}*{depth}"
-    # 색공간 표기 추가: sRGB/기타/미상
-    cs = ""
-    try:
-        if pix and not pix.isNull():
-            img = pix.toImage()
-            cs = describe_colorspace(img)
-    except Exception:
-        cs = ""
-    # 상세 표시 옵션: 프로파일명/비트뎁스
-    show_detail = bool(getattr(viewer, "_statusbar_show_profile_details", False))
-    cs_disp = f" [{cs}]" if cs else ""
-    if show_detail and pix and not pix.isNull():
-        try:
-            img2 = pix.toImage()
-            name = getattr(img2.colorSpace(), 'description', lambda: '')() or cs
-            depth2 = compute_display_bit_depth(img2)
-            cs_disp = f" [{name or cs}/{depth2}b]"
-        except Exception:
-            pass
-    viewer.status_left_label.setText(f"{idx_disp}/{total} {filename} {size_str} {dims}{cs_disp}")
+    dims = f"{w}*{h}"
+    # 색역/비트 수 표시 제거: 해상도까지만 출력
+    viewer.status_left_label.setText(f"{idx_disp}/{total} {filename} {size_str} {dims}")
     # 현재 표시가 썸네일이면 원본 업그레이드를 예약(정렬/인덱스 변동 시에도 보장)
     try:
         if getattr(viewer, "load_successful", False) and getattr(viewer, "current_image_path", None):
@@ -88,7 +58,7 @@ def update_status_left(viewer) -> None:
                     try:
                         if viewer._fullres_upgrade_timer.isActive():
                             viewer._fullres_upgrade_timer.stop()
-                        delay = int(getattr(viewer, "_fullres_upgrade_delay_ms", 120))
+                        delay = int(getattr(viewer, "_fullres_upgrade_delay_ms", 300))
                         viewer._fullres_upgrade_timer.start(max(0, delay))
                     except Exception:
                         pass

@@ -37,9 +37,23 @@ def restore_last_session(viewer) -> None:
         # 디렉터리 컨텍스트가 있으면 이를 우선 복원하고 인덱스를 반영
         if dpath and os.path.isdir(dpath):
             viewer.scan_directory(dpath)
+            # 우선순위: 저장된 파일 경로(fpath)가 해당 폴더 목록에 있으면 그 인덱스를 사용
             try:
-                if 0 <= dindex < len(viewer.image_files_in_dir):
-                    viewer.current_image_index = dindex
+                idx = -1
+                if fpath and os.path.isfile(fpath) and (viewer.image_files_in_dir or []):
+                    try:
+                        from os.path import normcase
+                        lst = [normcase(p) for p in (viewer.image_files_in_dir or [])]
+                        fp = normcase(fpath)
+                        if fp in lst:
+                            idx = lst.index(fp)
+                    except Exception:
+                        pass
+                # fpath로 못 찾으면 저장된 dindex를 사용
+                if idx < 0 and 0 <= dindex < len(viewer.image_files_in_dir):
+                    idx = dindex
+                if idx >= 0:
+                    viewer.current_image_index = idx
             except Exception:
                 pass
             if 0 <= viewer.current_image_index < len(viewer.image_files_in_dir):
@@ -63,11 +77,6 @@ def restore_last_session(viewer) -> None:
                     pass
             viewer.load_image(fpath, source='restore')
             try:
-                # 힌트 업데이트: 마지막 닫은 이미지 = 방금 복원한 파일
-                viewer._last_closed_image_path = fpath
-            except Exception:
-                pass
-            try:
                 from ..ui import rating_bar  # type: ignore
                 rating_bar.refresh(viewer)
             except Exception:
@@ -88,10 +97,6 @@ def restore_last_session(viewer) -> None:
                             except Exception:
                                 pass
                         viewer.load_image(first_path, source='restore')
-                        try:
-                            viewer._last_closed_image_path = first_path
-                        except Exception:
-                            pass
             except Exception:
                 pass
         # 보기 모드/배율 적용

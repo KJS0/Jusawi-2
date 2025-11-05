@@ -214,8 +214,8 @@ class JusawiViewer(QMainWindow):
         # 하단 필름 스트립을 고정 배치로 롤백
         self.main_layout.addWidget(self.filmstrip, 0)
         try:
-            # 시작 시에는 이미지가 없으므로 보이지 않게
-            self.filmstrip.setVisible(False)
+            # 시작 시에도 하단 필름스트립을 표시
+            self.filmstrip.setVisible(True)
         except Exception:
             pass
         # 전체 캐시 리셋 시 썸네일 메모리도 함께 초기화할 수 있도록 핸들러 제공
@@ -229,10 +229,10 @@ class JusawiViewer(QMainWindow):
             rating_bar.create(self)
         except Exception:
             pass
-        # 시작 시 평점 바 숨김
+        # 시작 시 평점/플래그 바 표시
         try:
             if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
-                self._rating_flag_bar.setVisible(False)
+                self._rating_flag_bar.setVisible(True)
         except Exception:
             pass
 
@@ -271,10 +271,12 @@ class JusawiViewer(QMainWindow):
         self._scale_apply_timer.timeout.connect(self._apply_scaled_pixmap_now)
         self._scale_apply_delay_ms = 30
         # 자동 업그레이드 지연(ms) 및 일시정지 플래그
-        self._fullres_upgrade_delay_ms = 120
+        self._fullres_upgrade_delay_ms = 300
         self._pause_auto_upgrade = False
         # 프리뷰 헤드룸 배율(1.0~1.2)
-        self._preview_headroom = 1.0
+        self._preview_headroom = 1.2
+        # 풀해상도 업그레이드가 실행될 최소 표시 배율( fit 계열에서만 사용 )
+        self._fullres_upgrade_min_scale = 0.5
         # 원본 풀해상도 이미지 보관(저장/고배율 표시용)
         self._fullres_image = None
         # 현재 픽스맵이 스케일 프리뷰인지 여부(원본 업그레이드 필요 판단용)
@@ -653,6 +655,9 @@ class JusawiViewer(QMainWindow):
     def fit_to_height(self):
         viewer_cmd.fit_to_height(self)
 
+    def reset_to_100(self):
+        viewer_cmd.reset_to_100(self)
+
     def zoom_in(self):
         viewer_cmd.zoom_in(self)
 
@@ -811,6 +816,17 @@ class JusawiViewer(QMainWindow):
         except Exception:
             return False
 
+    def closeEvent(self, event):
+        try:
+            from . import lifecycle as _lc
+            _lc.on_close(self)
+        except Exception:
+            pass
+        try:
+            return super().closeEvent(event)
+        except Exception:
+            return None
+
     def keyPressEvent(self, event):
         try:
             from . import event_handlers as evt
@@ -889,19 +905,7 @@ class JusawiViewer(QMainWindow):
     def _open_recent_8(self): self._open_recent_by_index(7)
     def _open_recent_9(self): self._open_recent_by_index(8)
 
-    # 마지막 닫은 이미지 다시 열기
-    def reopen_last_closed_image(self) -> None:
-        try:
-            path = getattr(self, "_last_closed_image_path", "") or ""
-            if path and os.path.isfile(path):
-                self.load_image(path, source='reopen')
-            else:
-                try:
-                    self.statusBar().showMessage("다시 열 수 있는 이미지가 없습니다.", 2000)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+    # 마지막 닫은 이미지 다시 열기 — 기능 제거됨
 
     # 보기 공유 토글 제거
 
@@ -1003,7 +1007,7 @@ class JusawiViewer(QMainWindow):
                     dpr = 1.0
             vw = max(1, int(view.viewport().width()))
             vh = max(1, int(view.viewport().height()))
-            headroom = float(getattr(self, "_preview_headroom", 1.0) or 1.0)
+            headroom = float(getattr(self, "_preview_headroom", 1.2) or 1.2)
             img = self.image_service.get_scaled_for_viewport(path, vw, vh, view_mode=vm, dpr=dpr, headroom=headroom)
             if img is None or img.isNull():
                 return
@@ -1030,7 +1034,7 @@ class JusawiViewer(QMainWindow):
                 try:
                     if self._fullres_upgrade_timer.isActive():
                         self._fullres_upgrade_timer.stop()
-                    delay = int(getattr(self, "_fullres_upgrade_delay_ms", 120))
+                    delay = int(getattr(self, "_fullres_upgrade_delay_ms", 300))
                     self._fullres_upgrade_timer.start(max(0, delay))
                 except Exception:
                     pass
@@ -1219,7 +1223,7 @@ class JusawiViewer(QMainWindow):
                 n = int(getattr(self, "_slideshow_prefetch_count", 0))
             except Exception:
                 n = 0
-            if n and n > 0:
+            if n and n > 0 and bool(getattr(self, "_enable_thumb_prefetch", True)):
                 idx = int(getattr(self, "current_image_index", -1))
                 files = getattr(self, "image_files_in_dir", []) or []
                 paths: list[str] = []
@@ -1245,12 +1249,6 @@ class JusawiViewer(QMainWindow):
 
     def delete_current_image(self):
         file_cmd.delete_current_image(self)
-        try:
-            # 삭제 직전의 경로를 마지막 닫은 이미지 힌트로 보관
-            if getattr(self, "current_image_path", None):
-                self._last_closed_image_path = self.current_image_path
-        except Exception:
-            pass
 
     # 삭제 기능은 delete_utils로 분리됨
     def _undo_last_delete(self):
@@ -1522,7 +1520,7 @@ class JusawiViewer(QMainWindow):
             n = int(getattr(self, "_prefetch_on_dir_enter", 0))
         except Exception:
             n = 0
-        if n and n > 0:
+        if n and n > 0 and bool(getattr(self, "_enable_thumb_prefetch", True)):
             try:
                 idx = int(getattr(self, "current_image_index", -1))
                 files = getattr(self, "image_files_in_dir", []) or []
@@ -1627,11 +1625,12 @@ class JusawiViewer(QMainWindow):
                 self.current_image_index = row
                 self.load_image_at_current_index()
                 try:
-                    # 파일 선택으로 이미지가 로드되었으니 필름스트립/평점바 표시
-                    if hasattr(self, 'filmstrip') and self.filmstrip is not None:
-                        self.filmstrip.setVisible(True)
-                    if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
-                        self._rating_flag_bar.setVisible(True)
+                    # UI 크롬이 숨김 상태가 아니라면만 보이도록 유지
+                    if not self.is_fullscreen and bool(getattr(self, "_ui_chrome_visible", True)):
+                        if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                            self.filmstrip.setVisible(True)
+                        if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
+                            self._rating_flag_bar.setVisible(True)
                 except Exception:
                     pass
                 try:
@@ -1663,10 +1662,11 @@ class JusawiViewer(QMainWindow):
         except Exception:
             pass
         try:
-            if hasattr(self, 'filmstrip') and self.filmstrip is not None:
-                self.filmstrip.setVisible(True)
-            if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
-                self._rating_flag_bar.setVisible(True)
+            if not self.is_fullscreen and bool(getattr(self, "_ui_chrome_visible", True)):
+                if hasattr(self, 'filmstrip') and self.filmstrip is not None:
+                    self.filmstrip.setVisible(True)
+                if hasattr(self, '_rating_flag_bar') and self._rating_flag_bar is not None:
+                    self._rating_flag_bar.setVisible(True)
         except Exception:
             pass
 

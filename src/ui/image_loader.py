@@ -278,15 +278,24 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
     except Exception:
         pass
     try:
-        preload_neighbors(viewer)
+        # 프리로드 정책: 유휴 시에만 설정이 켜져 있으면 즉시 호출 대신 유휴 타이머로 지연
+        if bool(getattr(viewer, "_preload_only_when_idle", False)):
+            try:
+                if hasattr(viewer, "_idle_prefetch_timer") and viewer._idle_prefetch_timer is not None:
+                    viewer._idle_prefetch_timer.start()
+            except Exception:
+                pass
+        else:
+            preload_neighbors(viewer)
     except Exception:
         pass
-    # 첫 이미지 로드 시 보조 UI 표시
+    # 첫 이미지 로드 시 보조 UI 표시 (UI 크롬이 표시 상태일 때만)
     try:
-        if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None:
-            viewer.filmstrip.setVisible(True)
-        if hasattr(viewer, '_rating_flag_bar') and viewer._rating_flag_bar is not None:
-            viewer._rating_flag_bar.setVisible(True)
+        if not viewer.is_fullscreen and bool(getattr(viewer, "_ui_chrome_visible", True)):
+            if hasattr(viewer, 'filmstrip') and viewer.filmstrip is not None:
+                viewer.filmstrip.setVisible(True)
+            if hasattr(viewer, '_rating_flag_bar') and viewer._rating_flag_bar is not None:
+                viewer._rating_flag_bar.setVisible(True)
     except Exception:
         pass
     # 자동화: AI 분석 자동 실행 (세분화: 열기/드롭/이동, 캐시 건너뛰기)
@@ -414,9 +423,9 @@ def load_image(viewer: "JusawiViewer", file_path: str, source: str = 'other') ->
     except Exception:
         pass
 
-    # 스케일 프리뷰 경로 비활성화: 항상 원본(또는 동등) 로드로 일관된 배율 보장
+	# 프리뷰 비활성화: 항상 원본(자동 변환 적용)으로 로드
 
-    # 폴백: 원본 동기 로드
+    # 폴백/애니메이션: 원본 동기 로드 후 적용
     path, img, success, _ = viewer.image_service.load(file_path)
     if success and img is not None:
         apply_loaded_image(viewer, path, img, source)

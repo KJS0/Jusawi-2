@@ -281,11 +281,6 @@ def reload_current_image(viewer: "JusawiViewer") -> None:
                     pass
         except Exception:
             pass
-        # 현재 이미지를 닫고 다시 로드하므로, '마지막 닫은 이미지' 힌트 업데이트
-        try:
-            viewer._last_closed_image_path = path
-        except Exception:
-            pass
         viewer.load_image(path, source='reload')
     except Exception:
         pass

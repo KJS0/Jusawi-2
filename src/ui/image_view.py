@@ -236,6 +236,12 @@ class ImageView(QGraphicsView):
             src_scale = 1.0
         effective = desired / (1.0 / src_scale) if src_scale != 0 else desired
         # 적용: 작은 배율에서 계단 현상을 줄이기 위해 하한 해상도 기준을 높여줌
+        # 변화량이 매우 작으면 재적용/재센터링을 건너뛰어 흔들림을 방지
+        try:
+            if abs(float(self._current_scale) - float(effective)) < 5e-4:
+                return
+        except Exception:
+            pass
         self.resetTransform()
         t_view = QTransform()
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
@@ -277,6 +283,12 @@ class ImageView(QGraphicsView):
             src_scale = 1.0
         effective = desired / (1.0 / src_scale) if src_scale != 0 else desired
         clamped = self.clamp(effective, self._min_scale, self._max_scale)
+        # 변화량이 매우 작으면 재적용/재센터링을 건너뜀
+        try:
+            if abs(float(self._current_scale) - float(clamped)) < 5e-4:
+                return
+        except Exception:
+            pass
         t_view = QTransform()
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         t_view.scale(clamped, clamped)
@@ -318,6 +330,12 @@ class ImageView(QGraphicsView):
             src_scale = 1.0
         effective = desired / (1.0 / src_scale) if src_scale != 0 else desired
         clamped = self.clamp(effective, self._min_scale, self._max_scale)
+        # 변화량이 매우 작으면 재적용/재센터링을 건너뜀
+        try:
+            if abs(float(self._current_scale) - float(clamped)) < 5e-4:
+                return
+        except Exception:
+            pass
         t_view = QTransform()
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         t_view.scale(clamped, clamped)
@@ -344,7 +362,11 @@ class ImageView(QGraphicsView):
 
     def _center_view(self):
         if self._pix_item:
-            self.centerOn(self._pix_item)
+            try:
+                r = self._pix_item.sceneBoundingRect()
+                self.centerOn(r.center())
+            except Exception:
+                self.centerOn(self._pix_item)
 
     def set_min_max_scale(self, min_scale: float, max_scale: float):
         self._min_scale = min_scale
@@ -357,6 +379,12 @@ class ImageView(QGraphicsView):
         if not self._pix_item:
             return
         clamped = self.clamp(new_scale, self._min_scale, self._max_scale)
+        # 동일 배율이면 불필요한 변환/센터링을 건너뛰어 미세 이동을 방지
+        try:
+            if abs(clamped - float(self._current_scale)) < 1e-9:
+                return
+        except Exception:
+            pass
         # absolute transform
         t = QTransform()
         t.scale(clamped, clamped)
@@ -785,11 +813,38 @@ class ImageView(QGraphicsView):
                 item_anchor_point = self._pix_item.mapFromScene(scene_center)
             except Exception:
                 item_anchor_point = None
+        # 리사이즈 중에는 QGraphicsView의 자동 중심 유지가 중복되지 않도록 NoAnchor로 일시 전환
+        prev_anchor = None
+        try:
+            prev_anchor = self.resizeAnchor()
+            self.setResizeAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
+        except Exception:
+            prev_anchor = None
         super().resizeEvent(event)
+        try:
+            if prev_anchor is not None:
+                self.setResizeAnchor(prev_anchor)
+        except Exception:
+            pass
         if self._pix_item and item_anchor_point is not None:
             try:
                 self.set_absolute_scale(cur_scale)
                 new_scene_point = self._pix_item.mapToScene(item_anchor_point)
+                # 100% 배율이며 회전이 없고 반전이 없을 때는 정수 좌표로 스냅하여 미세 드리프트 감소
+                try:
+                    if abs(float(self._current_scale) - 1.0) < 1e-9 and int(getattr(self, '_rotation_degrees', 0)) % 360 == 0 and not getattr(self, '_flip_horizontal', False) and not getattr(self, '_flip_vertical', False):
+                        new_scene_point.setX(round(float(new_scene_point.x())))
+                        new_scene_point.setY(round(float(new_scene_point.y())))
+                        # 라운딩 경계에서 왕복 흔들림을 막기 위해 하향 바이어스 적용
+                        try:
+                            dpr = float(self.viewport().devicePixelRatioF())
+                        except Exception:
+                            dpr = 1.0
+                        eps = max(1e-4, 0.25 / max(1.0, dpr))
+                        new_scene_point.setX(float(new_scene_point.x()) - eps)
+                        new_scene_point.setY(float(new_scene_point.y()) - eps)
+                except Exception:
+                    pass
                 self.centerOn(new_scene_point)
             except Exception:
                 pass

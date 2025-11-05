@@ -163,14 +163,14 @@ class ImageService(QObject):
         self._thread: QThread | None = None
         self._worker: _ImageWorker | None = None
         # 간단한 LRU QImage 캐시 (용량 제한: 바이트 단위)
-        self._img_cache = _QImageCache(max_bytes=256 * 1024 * 1024)  # 기본 256MB
+        self._img_cache = _QImageCache(max_bytes=512 * 1024 * 1024)  # 기본 512MB
         # 스케일별 다운샘플 QImage 캐시 (원본과 분리, 약간 더 여유)
-        self._scaled_cache = _QImageCache(max_bytes=384 * 1024 * 1024)
+        self._scaled_cache = _QImageCache(max_bytes=768 * 1024 * 1024)
         # 프리로드용 스레드풀 및 세대 토큰
         self._pool = QThreadPool.globalInstance()
         self._preload_generation = 0
         # 프리로드 정책
-        self._preload_max_concurrency = 0
+        self._preload_max_concurrency = 2
         self._preload_retry_count = 0
         self._preload_retry_delay_ms = 0
         # 애니메이션 정보 캐시: path -> frame_count(>1이면 애니메이션), -1 미상/계산 실패
@@ -439,6 +439,12 @@ class ImageService(QObject):
                 hr = 1.0
             if hr < 1.0:
                 hr = 1.0
+            # 강한 축소 구간에서는 헤드룸을 1.0으로 제한하여 과도한 샤프함을 억제
+            try:
+                if s <= 0.5:
+                    hr = 1.0
+            except Exception:
+                pass
             s = min(1.0, s * hr)
             qscale = self._quantize_scale(s)
             # 캐시 키 구성
@@ -450,10 +456,26 @@ class ImageService(QObject):
             from PyQt6.QtCore import QSize  # type: ignore[import]
             bw = max(1, int(round(ow * qscale * dprf)))
             bh = max(1, int(round(oh * qscale * dprf)))
-            reader.setScaledSize(QSize(bw, bh))
+            # 미니파이 프리필터: s가 충분히 작을 때 조금 더 크게 읽고, 최종 단계에서 부드럽게 축소
+            boost = 1.0
+            try:
+                if s <= 0.5:
+                    boost = 2.0
+            except Exception:
+                boost = 1.0
+            bw_boost = min(ow, int(round(bw * boost)))
+            bh_boost = min(oh, int(round(bh * boost)))
+            reader.setScaledSize(QSize(bw_boost, bh_boost))
             img = reader.read()
             if img.isNull():
                 return None
+            # 최종 목표로 고품질 축소
+            try:
+                if boost > 1.0 and (img.width() != bw or img.height() != bh):
+                    from PyQt6.QtCore import Qt  # type: ignore[import]
+                    img = img.scaled(bw, bh, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            except Exception:
+                pass
             try:
                 img = self._convert_image_for_display(img)  # type: ignore[attr-defined]
             except Exception:

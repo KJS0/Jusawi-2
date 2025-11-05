@@ -128,6 +128,10 @@ class GeocodingService:
 
     def _get_korea_address(self, latitude: float, longitude: float) -> Optional[Dict]:
         if not self.kakao_api_key or requests is None:
+            try:
+                logger.info("geocode.kr.skip | reason=%s", "no_key" if not self.kakao_api_key else "no_requests")
+            except Exception:
+                pass
             return None
         try:
             url = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
@@ -138,6 +142,10 @@ class GeocodingService:
             data = resp.json()
             docs = data.get('documents', [])
             if not docs:
+                try:
+                    logger.warning("geocode.kr.empty | status=%s", data.get('status', ''))
+                except Exception:
+                    pass
                 return None
             doc = docs[0]
             road = (doc.get('road_address') or {})
@@ -158,11 +166,19 @@ class GeocodingService:
                 'coordinates': f"{latitude}, {longitude}",
                 'formatted': f"{full} ({a_type})",
             }
-        except Exception:
+        except Exception as e:
+            try:
+                logger.exception("geocode.kr.error | err=%s", str(e))
+            except Exception:
+                pass
             return None
 
     def _get_international_address(self, latitude: float, longitude: float, language: str = "ko") -> Optional[Dict]:
         if not self.google_api_key or requests is None:
+            try:
+                logger.info("geocode.intl.skip | reason=%s", "no_key" if not self.google_api_key else "no_requests")
+            except Exception:
+                pass
             return None
         try:
             url = "https://maps.googleapis.com/maps/api/geocode/json"
@@ -171,6 +187,10 @@ class GeocodingService:
             resp.raise_for_status()
             data = resp.json()
             if data.get('status') != 'OK':
+                try:
+                    logger.warning("geocode.intl.status | status=%s | error_message=%s", data.get('status'), data.get('error_message'))
+                except Exception:
+                    pass
                 return None
             results = data.get('results', [])
             if not results:
@@ -184,7 +204,11 @@ class GeocodingService:
                 'coordinates': f"{latitude}, {longitude}",
                 'formatted': full,
             }
-        except Exception:
+        except Exception as e:
+            try:
+                logger.exception("geocode.intl.error | err=%s", str(e))
+            except Exception:
+                pass
             return None
 
 
@@ -219,8 +243,16 @@ def _get_google_static_map_png(latitude: float, longitude: float, width: int = 6
         }
         resp = requests.get(url, params=params, timeout=5)
         if resp.status_code != 200:
+            try:
+                logger.warning("map.static.google.http | code=%s | reason=%s", resp.status_code, getattr(resp, 'reason', ''))
+            except Exception:
+                pass
             return None
         if "image" not in (resp.headers.get("Content-Type", "") or ""):
+            try:
+                logger.warning("map.static.google.content_type | ct=%s", resp.headers.get("Content-Type", ""))
+            except Exception:
+                pass
             return None
         return resp.content
     except Exception:
@@ -244,8 +276,16 @@ def _get_osm_static_map_png(latitude: float, longitude: float, width: int = 640,
         }
         resp = requests.get(url, params=params, timeout=6)
         if resp.status_code != 200:
+            try:
+                logger.warning("map.static.osm.http | code=%s | reason=%s", resp.status_code, getattr(resp, 'reason', ''))
+            except Exception:
+                pass
             return None
         if "image" not in (resp.headers.get("Content-Type", "") or ""):
+            try:
+                logger.warning("map.static.osm.content_type | ct=%s", resp.headers.get("Content-Type", ""))
+            except Exception:
+                pass
             return None
         return resp.content
     except Exception:
@@ -282,8 +322,16 @@ def _get_kakao_static_map_png(latitude: float, longitude: float, width: int = 64
         headers = {"Authorization": f"KakaoAK {api_key}"}
         resp = requests.get(url, headers=headers, params=params, timeout=6)
         if resp.status_code != 200:
+            try:
+                logger.warning("map.static.kakao.http | code=%s | reason=%s", resp.status_code, getattr(resp, 'reason', ''))
+            except Exception:
+                pass
             return None
         if "image" not in (resp.headers.get("Content-Type", "") or ""):
+            try:
+                logger.warning("map.static.kakao.content_type | ct=%s", resp.headers.get("Content-Type", ""))
+            except Exception:
+                pass
             return None
         return resp.content
     except Exception:
@@ -291,7 +339,83 @@ def _get_kakao_static_map_png(latitude: float, longitude: float, width: int = 64
 
 
 def get_static_map_png(latitude: float, longitude: float, width: int = 640, height: int = 400, zoom: int = 15, provider: str | None = None) -> Optional[bytes]:
-    """정적 지도는 Google로 고정. 키가 없으면 None 반환."""
-    return _get_google_static_map_png(latitude, longitude, width, height, zoom)
+    """정적 지도 PNG 바이트를 반환한다.
+
+    우선순위:
+    - provider가 'google'이면 Google 시도, 실패 시 OSM 폴백
+    - provider가 'kakao'이면 Kakao 시도, 실패 시 OSM 폴백
+    - provider가 None 또는 'auto'이면:
+        - 한국 좌표 & Kakao 키가 있으면 Kakao → 실패 시 Google → 실패 시 OSM
+        - 그 외에는 Google → 실패 시 Kakao → 실패 시 OSM
+    """
+    prov = (provider or "auto").strip().lower()
+    # 최신 키 로드
+    try:
+        ak = _load_yaml_configs().get('map', {}).get('api_keys', {})  # type: ignore
+    except Exception:
+        ak = {}
+    kakao_key = str(ak.get('kakao', '') or '')
+    google_key = str(ak.get('google', '') or '')
+    try:
+        logger.info("map.static | prov=%s | google_key=%s | kakao_key=%s | lat=%.6f | lon=%.6f | w=%d | h=%d | z=%d",
+                    prov, "set" if bool(google_key) else "", "set" if bool(kakao_key) else "",
+                    float(latitude), float(longitude), int(width), int(height), int(zoom))
+    except Exception:
+        pass
+
+    def _try_google() -> Optional[bytes]:
+        return _get_google_static_map_png(latitude, longitude, width, height, zoom)
+
+    def _try_kakao() -> Optional[bytes]:
+        return _get_kakao_static_map_png(latitude, longitude, width, height, zoom)
+
+    def _try_osm() -> Optional[bytes]:
+        return _get_osm_static_map_png(latitude, longitude, width, height, zoom)
+
+    # 강제 지정 처리
+    if prov == 'google':
+        data = _try_google()
+        if not data:
+            try:
+                logger.warning("map.static.google_failed -> fallback=osm")
+            except Exception:
+                pass
+        return data or _try_osm()
+    if prov == 'kakao':
+        data = _try_kakao()
+        if not data:
+            try:
+                logger.warning("map.static.kakao_failed -> fallback=osm")
+            except Exception:
+                pass
+        return data or _try_osm()
+
+    # 자동 선택
+    if GeocodingService().is_korea_coordinate(latitude, longitude) and kakao_key:
+        data = _try_kakao() or _try_google()
+        if not data:
+            try:
+                logger.warning("map.static.auto_korea_failed -> fallback=osm")
+            except Exception:
+                pass
+        return data or _try_osm()
+    # 비한국 좌표 또는 카카오 키 없음
+    if google_key:
+        data = _try_google() or _try_kakao()
+        if not data:
+            try:
+                logger.warning("map.static.auto_global_failed -> fallback=osm")
+            except Exception:
+                pass
+        return data or _try_osm()
+    if kakao_key:
+        data = _try_kakao()
+        if not data:
+            try:
+                logger.warning("map.static.auto_kakao_only_failed -> fallback=osm")
+            except Exception:
+                pass
+        return data or _try_osm()
+    return _try_osm()
 
 

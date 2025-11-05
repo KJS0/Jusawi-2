@@ -5,10 +5,11 @@ from typing import Any, Dict
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
-    QWidget, QTabWidget, QMessageBox, QProgressDialog, QLineEdit
+    QWidget, QTabWidget, QMessageBox, QLineEdit
 )  # type: ignore[import]
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal  # type: ignore[import]
 from PyQt6.QtGui import QShortcut, QKeySequence  # type: ignore[import]
+import socket
 
 from ..services.ai_analysis_service import AIAnalysisService, AnalysisContext, AIConfig
 from ..utils.logging_setup import get_logger
@@ -99,24 +100,11 @@ class AIAnalysisDialog(QDialog):
             pass
         root.addWidget(self.tags_edit)
 
-        # Buttons
+        # Buttons (요구 순서: 분석 실행, 검색 열기, 닫기)
         btn_row = QHBoxLayout()
         self.analyze_btn = QPushButton("분석 실행")
         self.analyze_btn.clicked.connect(self._on_analyze)
         btn_row.addWidget(self.analyze_btn)
-
-        # 복사/내보내기/파일명 변경 버튼 추가
-        self.copy_caption_btn = QPushButton("짧은 캡션 복사")
-        self.copy_caption_btn.clicked.connect(lambda: self._copy_to_clipboard(which="short"))
-        btn_row.addWidget(self.copy_caption_btn)
-
-        self.copy_tags_btn = QPushButton("태그 복사")
-        self.copy_tags_btn.clicked.connect(lambda: self._copy_to_clipboard(which="tags"))
-        btn_row.addWidget(self.copy_tags_btn)
-
-        self.copy_long_btn = QPushButton("긴 캡션 복사")
-        self.copy_long_btn.clicked.connect(lambda: self._copy_to_clipboard(which="long"))
-        btn_row.addWidget(self.copy_long_btn)
 
         # 퀵액션: 자연어 검색 열기(결과 기반)
         self.search_btn = QPushButton("검색 열기")
@@ -138,9 +126,6 @@ class AIAnalysisDialog(QDialog):
             _btn_style = "color: #EAEAEA;"
             for _b in [
                 self.analyze_btn,
-                self.copy_caption_btn,
-                self.copy_tags_btn,
-                self.copy_long_btn,
                 self.search_btn,
                 close_btn,
             ]:
@@ -152,15 +137,36 @@ class AIAnalysisDialog(QDialog):
         except Exception:
             pass
 
-        # 진행률/취소 가능한 로딩창 준비(필요 시 표시)
-        self._progress = QProgressDialog("AI 분석 준비 중...", "중지", 0, 100, self)
-        try:
-            self._progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-            self._progress.canceled.connect(self._on_cancel)
-            self._progress.reset()
-            self._progress.hide()
-        except Exception:
-            pass
+        # 로딩바 없는 메시지 전용 다이얼로그
+        class _BusyDialog(QDialog):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.setWindowTitle("AI 분석")
+                self.setModal(True)
+                try:
+                    self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+                except Exception:
+                    pass
+                lay = QVBoxLayout(self)
+                try:
+                    lay.setContentsMargins(16, 16, 16, 16)
+                except Exception:
+                    pass
+                lbl = QLabel("생성 중...", self)
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lay.addWidget(lbl)
+                try:
+                    self.setStyleSheet(
+                        "QDialog { background-color: #2B2B2B; color: #EAEAEA; }"
+                        " QLabel { color: #EAEAEA; }"
+                    )
+                except Exception:
+                    pass
+                try:
+                    self.setFixedSize(320, 120)
+                except Exception:
+                    pass
+        self._busy = _BusyDialog(self)
 
         # Esc로 분석 취소(다이얼로그 내 우선)
         try:
@@ -178,14 +184,27 @@ class AIAnalysisDialog(QDialog):
     def _on_cancel(self):
         self._cancel_flag = True
         try:
-            self._progress.setLabelText("취소 중...")
+            self._busy.hide()
         except Exception:
             pass
-        # 즉시 진행 중 작업 종료를 유도
+        # 즉시 진행 중 작업 종료를 유도(UI는 즉시 반환)
         try:
             if self._thread and self._thread.isRunning():
-                # 워커는 주기적으로 is_cancelled를 확인하므로, 짧은 대기 후 정리
                 self._thread.requestInterruption()
+                # UI 업데이트 시그널을 미리 끊어, 취소 직후 UI가 멈추도록 함
+                if self._worker:
+                    try:
+                        self._worker.progress.disconnect()
+                    except Exception:
+                        pass
+                    try:
+                        self._worker.finished.disconnect()
+                    except Exception:
+                        pass
+                    try:
+                        self._worker.failed.disconnect()
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -199,12 +218,23 @@ class AIAnalysisDialog(QDialog):
         if self._thread is not None:
             return
         self._cancel_flag = False
-        self._progress.setValue(0)
-        self._progress.setLabelText("분석 시작")
-        self._progress.show()
 
-        # 뷰어 설정을 AIConfig로 구성(환경변수 의존 제거)
+        # 뷰어 설정을 AIConfig로 구성(환경변수 의존 제거) + 실제 온라인 여부 확인
         cfg = self._build_config_from_viewer()
+        try:
+            if self._is_probably_online():
+                # 온라인이면 강제로 offline_mode 해제(잘못된 설정값 무시)
+                try:
+                    cfg.offline_mode = False
+                except Exception:
+                    pass
+            else:
+                QMessageBox.warning(self, "AI 분석", "오프라인에서는 이 기능을 실행할 수 없습니다.")
+                return
+        except Exception:
+            # 온라인 점검 실패 시, 보수적으로 계속 진행(서비스에서 실제 오류 처리)
+            pass
+
         try:
             self._service.apply_config(cfg)
         except Exception:
@@ -226,14 +256,25 @@ class AIAnalysisDialog(QDialog):
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._thread.start()
-
-    def _on_progress(self, p: int, msg: str):
         try:
-            self._progress.setValue(int(max(0, min(100, p))))
-            if msg:
-                self._progress.setLabelText(str(msg))
+            self._busy.show()
         except Exception:
             pass
+
+    def _is_probably_online(self) -> bool:
+        try:
+            s = socket.create_connection(("api.openai.com", 443), timeout=1.2)
+            try:
+                s.close()
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+    def _on_progress(self, p: int, msg: str):
+        # 로딩 메시지 고정("생성 중...") — 진행률 업데이트는 표시하지 않음
+        return
 
     def _on_finished(self, data: Dict[str, Any], status: str):
         self._cleanup_worker()
@@ -256,7 +297,7 @@ class AIAnalysisDialog(QDialog):
         except Exception:
             pass
         try:
-            self._progress.hide()
+            self._busy.hide()
         except Exception:
             pass
         # 폴백으로 반환된 경우 자세한 원인 안내
@@ -276,7 +317,7 @@ class AIAnalysisDialog(QDialog):
     def _on_failed(self, err: str):
         self._cleanup_worker()
         try:
-            self._progress.hide()
+            self._busy.hide()
         except Exception:
             pass
         # 서비스에 축적된 상세 오류도 함께 표시(가능 시)
@@ -361,17 +402,10 @@ class AIAnalysisDialog(QDialog):
 
     def _on_close(self):
         if self._thread is not None and self._thread.isRunning():
-            # 취소 요청 후 스레드 종료를 기다리고 닫기
+            # 즉시 취소 후 바로 닫기(스레드는 백그라운드에서 정리되도록 함)
             self._on_cancel()
-            self._close_pending = True
             try:
-                self._progress.show()
-                self._progress.setLabelText("취소 중… 네트워크 요청 종료 대기")
-            except Exception:
-                pass
-            try:
-                # 종료되면 자동으로 닫기
-                self._thread.finished.connect(lambda: (self._cleanup_worker(), self.accept()))
+                self.accept()
             except Exception:
                 pass
             return
@@ -485,6 +519,10 @@ class AIAnalysisDialog(QDialog):
             cfg.fast_mode = bool(getattr(self._viewer, "_ai_fast_mode", False))
         except Exception:
             cfg.fast_mode = False
+        try:
+            cfg.offline_mode = bool(getattr(self._viewer, "_offline_mode", False))
+        except Exception:
+            cfg.offline_mode = False
         try:
             cfg.exif_level = str(getattr(self._viewer, "_ai_exif_level", "full"))
         except Exception:

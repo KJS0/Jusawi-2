@@ -193,7 +193,7 @@ def apply_scaled_pixmap_now(viewer: "JusawiViewer") -> None:
         if need_upgrade and not bool(getattr(viewer, "_pause_auto_upgrade", False)):
             if viewer._fullres_upgrade_timer.isActive():
                 viewer._fullres_upgrade_timer.stop()
-            delay = int(getattr(viewer, "_fullres_upgrade_delay_ms", 120))
+            delay = int(getattr(viewer, "_fullres_upgrade_delay_ms", 300))
             viewer._fullres_upgrade_timer.start(max(0, delay))
             # 이벤트 루프 다음 틱에 업그레이드 시도(지연 반영)
             try:
@@ -211,6 +211,28 @@ def upgrade_to_fullres_if_needed(viewer: "JusawiViewer") -> None:
             return
         if viewer._is_current_file_animation() or getattr(viewer, "_movie", None):
             return
+        # fit 계열에서 너무 작은 유효 배율이면 풀해상도 업그레이드를 보류(스무딩 유지)
+        try:
+            vm = str(getattr(viewer.image_display_area, "_view_mode", "free") or "free")
+        except Exception:
+            vm = "free"
+        try:
+            cur_scale = float(getattr(viewer, "_last_scale", 1.0) or 1.0)
+        except Exception:
+            cur_scale = 1.0
+        try:
+            src_scale = float(getattr(viewer.image_display_area, "_source_scale", 1.0) or 1.0)
+        except Exception:
+            src_scale = 1.0
+        try:
+            min_scale = float(getattr(viewer, "_fullres_upgrade_min_scale", 0.5) or 0.5)
+        except Exception:
+            min_scale = 0.5
+        # 유효 배율 = 보기 배율 * 소스(프리뷰) 배율
+        effective_scale = cur_scale * src_scale
+        if vm in ("fit", "fit_width", "fit_height") and effective_scale <= min_scale:
+            return
+        
         # 풀해상도가 없으면 지금 디코드하여 업그레이드 준비
         if getattr(viewer, "_fullres_image", None) is None or viewer._fullres_image.isNull():
             try:

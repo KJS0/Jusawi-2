@@ -265,22 +265,8 @@ class NaturalSearchDialog(QDialog):
             self._render_results(results)
             return
         self._render_results(results2)
-        # 필름 스트립 가상 컬렉션 표시 옵션
-        try:
-            viewer = self.parent()
-            if viewer is not None and bool(getattr(viewer, "_search_show_in_filmstrip", False)):
-                paths = [p for p, _ in results2]
-                if paths and hasattr(viewer, "filmstrip") and getattr(viewer, "filmstrip") is not None:
-                    try:
-                        viewer.filmstrip.setVisible(True)
-                    except Exception:
-                        pass
-                    try:
-                        viewer.filmstrip.set_items(paths, -1)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        # 요구사항: 자연어 검색 결과는 필름스트립(인덱스)에 표시하지 않음
+        # (기존 viewer.filmstrip.set_items 경로를 제거)
 
     def _on_failed(self, err: str):
         self._cleanup_worker()

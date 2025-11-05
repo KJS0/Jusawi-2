@@ -20,15 +20,14 @@ class Command:
 COMMANDS: List[Command] = [
     Command("open_file", "파일 열기", "파일 열기 대화상자", "파일", "open_file", ["Ctrl+O"]),
     Command("open_folder", "폴더 열기", "폴더 선택 후 스캔", "파일", "open_folder", ["Ctrl+Shift+O"]),
-    Command("reload_current", "현재 파일 다시 읽기", "디스크에서 다시 로드", "파일", "reload_current_image", ["F5", "Ctrl+R"]),
-    Command("toggle_fullscreen", "전체화면 토글", "전체화면 전환", "보기", "toggle_fullscreen", ["F11", "Alt+Enter"]),
+    Command("reload_current", "현재 파일 다시 읽기", "디스크에서 다시 로드", "파일", "reload_current_image", ["F5"]),
+    Command("toggle_fullscreen", "전체화면 토글", "전체화면 전환", "보기", "toggle_fullscreen", ["F11", "Alt+Enter", "Alt+Return"]),
     Command("toggle_ui_chrome", "UI 크롬 토글", "툴바/필름스트립/평점바 표시 전환", "보기", "toggle_ui_chrome", ["Tab"]),
     Command("toggle_info_overlay", "정보 오버레이 토글", "파일/해상도 정보 오버레이 표시 전환", "보기", "toggle_info_overlay", ["Ctrl+H"]),
     Command("handle_escape", "나가기/전체화면 종료", "Esc 동작", "시스템", "handle_escape", ["Escape"], lock_key=True),
     Command("delete_current_image", "파일 삭제", "현재 파일을 휴지통으로", "파일", "delete_current_image", ["Delete"]),
 
     # 최근/세션 관련
-    Command("reopen_last_closed", "마지막 닫은 이미지 다시 열기", "직전에 닫은 이미지를 다시 엽니다", "파일", "reopen_last_closed_image", ["Ctrl+Shift+T"]),
     Command("clear_recent", "최근 목록 비우기", "최근 파일/폴더 목록을 지웁니다", "파일", "clear_recent", ["Ctrl+Alt+Shift+R"]),
 
     # 캐시 비우기

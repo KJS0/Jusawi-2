@@ -96,6 +96,10 @@ if __name__ == "__main__":
             pass
     viewer.show()
     try:
+        app.aboutToQuit.connect(viewer.save_last_session)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
         rc = app.exec()
         try:
             if log:
