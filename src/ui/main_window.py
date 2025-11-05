@@ -133,14 +133,11 @@ class JusawiViewer(QMainWindow):
         self.setCentralWidget(central_widget)
         # 배경/스타일은 theme.apply_ui_theme_and_spacing에서 일괄 적용
         central_widget.setStyleSheet("")
-        # Drag & Drop 허용 (초기 상태 포함 창 어디서나 동작하도록 중앙/뷰포트에도 적용)
-        self.setAcceptDrops(True)
-        central_widget.setAcceptDrops(True)
-        central_widget.installEventFilter(self)
-        # DnD 이벤트 필터 설치(윈도우/중앙/뷰포트에서 일관 처리)
+        # Drag & Drop 비활성화
+        self.setAcceptDrops(False)
+        central_widget.setAcceptDrops(False)
         try:
-            self._dnd_filter = DnDEventFilter(self)
-            central_widget.installEventFilter(self._dnd_filter)
+            central_widget.removeEventFilter(self)
         except Exception:
             pass
 
@@ -154,20 +151,15 @@ class JusawiViewer(QMainWindow):
         self.image_display_area.cursorPosChanged.connect(self.on_cursor_pos_changed)
         # 명시적 min/max 스케일 설정
         self.image_display_area.set_min_max_scale(self.min_scale, self.max_scale)
-        # ImageView 및 내부 뷰포트에도 DnD 허용 및 필터 설치
-        self.image_display_area.setAcceptDrops(True)
+        # ImageView 및 내부 뷰포트 DnD 비활성화
+        self.image_display_area.setAcceptDrops(False)
         try:
-            self.image_display_area.viewport().setAcceptDrops(True)
-            self.image_display_area.viewport().installEventFilter(self)
-            try:
-                self.image_display_area.viewport().installEventFilter(self._dnd_filter)
-            except Exception:
-                pass
+            self.image_display_area.viewport().setAcceptDrops(False)
+            self.image_display_area.viewport().removeEventFilter(self)
         except Exception:
             pass
-        self.image_display_area.installEventFilter(self)
         try:
-            self.image_display_area.installEventFilter(self._dnd_filter)
+            self.image_display_area.removeEventFilter(self)
         except Exception:
             pass
         # 메인 콘텐츠 영역: 이미지 + 정보 패널(우측) → QSplitter로 가변 너비
@@ -365,6 +357,16 @@ class JusawiViewer(QMainWindow):
 
         # 설정 로드 및 최근/세션 복원
         self.load_settings()
+        # 오버레이 관련 기능 비활성화(설정값이 있더라도 강제 비활성)
+        try:
+            self._anim_overlay_enabled = False
+            self._fs_show_filmstrip_overlay = False
+            self._overlay_enabled_default = False
+            self._overlay_visible = False
+            if getattr(self, "_info_overlay", None) is not None:
+                self._info_overlay.setVisible(False)
+        except Exception:
+            pass
         # YAML에서 고급 캐시 설정이 제공된 경우 이미지 서비스에 적용
         try:
             img_max = getattr(self, "_img_cache_max_bytes", None)
@@ -508,6 +510,10 @@ class JusawiViewer(QMainWindow):
         if 0 <= self.current_image_index < len(self.image_files_in_dir):
             self.load_image(self.image_files_in_dir[self.current_image_index])
         else:
+            try:
+                self.clear_display()
+            except Exception:
+                pass
             self.statusBar().showMessage("폴더에 표시할 이미지가 없습니다.", 3000)
 
     def clear_recent(self):
@@ -1053,18 +1059,11 @@ class JusawiViewer(QMainWindow):
                 pass
 
     def toggle_info_overlay(self):
-        """파일/해상도/배율 정보 오버레이 표시 전환(전체화면 외에서도 동작)"""
-        if getattr(self, "_info_overlay", None) is None:
-            return
-        self._overlay_visible = not bool(getattr(self, "_overlay_visible", False))
-        if self._overlay_visible:
-            try:
-                from .fs_overlays import update_info_overlay_text
-                update_info_overlay_text(self)
-            except Exception:
-                pass
+        # 오버레이 비활성화: 토글은 동작하지 않음
         try:
-            self._info_overlay.setVisible(self._overlay_visible)
+            self._overlay_visible = False
+            if getattr(self, "_info_overlay", None) is not None:
+                self._info_overlay.setVisible(False)
         except Exception:
             pass
 

@@ -355,6 +355,24 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
 
 
 def load_image(viewer: "JusawiViewer", file_path: str, source: str = 'other') -> bool:
+    # 네트워크 파일 로드 비활성화: HTTP/HTTPS 및 Windows UNC 경로 차단
+    try:
+        p = str(file_path or "")
+        if p.lower().startswith(("http://", "https://")):
+            try:
+                viewer.statusBar().showMessage("네트워크 URL은 지원하지 않습니다.", 3000)
+            except Exception:
+                pass
+            return False
+        import os
+        if os.name == 'nt' and p.startswith('\\\\'):
+            try:
+                viewer.statusBar().showMessage("네트워크 공유 경로는 지원하지 않습니다.", 3000)
+            except Exception:
+                pass
+            return False
+    except Exception:
+        pass
     if viewer._is_dirty and viewer.current_image_path and os.path.normcase(file_path) != os.path.normcase(viewer.current_image_path):
         if not viewer._handle_dirty_before_action():
             try:
@@ -411,11 +429,12 @@ def load_image(viewer: "JusawiViewer", file_path: str, source: str = 'other') ->
         viewer.log.error("load_image_fail | file=%s", os.path.basename(file_path))
     except Exception:
         pass
+    # 실패 시 기존 목록/상태를 유지하여 다른 이미지 열람이 가능하도록 한다.
     viewer.load_successful = False
-    viewer.current_image_path = None
-    viewer.image_files_in_dir = []
-    viewer.current_image_index = -1
-    viewer.update_window_title()
+    try:
+        viewer.statusBar().showMessage("이미지를 불러올 수 없습니다.", 3000)
+    except Exception:
+        pass
     viewer.update_button_states()
     viewer.update_status_left()
     viewer.update_status_right()

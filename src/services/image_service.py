@@ -12,6 +12,42 @@ from ..utils.logging_setup import get_logger
 _log = get_logger("svc.ImageService")
 
 
+_DECODE_MEMORY_CAP_MB_DEFAULT = 512
+_DECODE_MEMORY_CAP_MB = _DECODE_MEMORY_CAP_MB_DEFAULT
+
+def _apply_safe_scaled_size_for_reader(reader: QImageReader, memory_cap_mb: int) -> None:
+    """원본 해상도가 주어진 메모리 상한을 초과할 경우, 안전한 스케일로 디코딩하도록 설정한다.
+    - 상한은 대략 RGBA 4바이트/픽셀을 기준으로 추정한다.
+    - reader.size()가 유효하지 않거나 계산에 실패하면 아무 것도 하지 않는다.
+    """
+    try:
+        cap_mb = int(memory_cap_mb)
+    except Exception:
+        cap_mb = _DECODE_MEMORY_CAP_MB_DEFAULT
+    try:
+        osize = reader.size()
+        width = int(osize.width())
+        height = int(osize.height())
+    except Exception:
+        width = 0
+        height = 0
+    if width <= 0 or height <= 0:
+        return
+    try:
+        cap_bytes = max(1, cap_mb) * 1024 * 1024
+        # 대략 RGBA 4B/px 기준으로 추정
+        estimated_bytes = int(width) * int(height) * 4
+        if estimated_bytes > cap_bytes:
+            from PyQt6.QtCore import QSize  # type: ignore[import]
+            # 면적 비례하므로 제곱근 비율로 축소
+            import math
+            scale = math.sqrt(cap_bytes / float(max(1, estimated_bytes)))
+            new_w = max(1, int(width * scale))
+            new_h = max(1, int(height * scale))
+            reader.setScaledSize(QSize(new_w, new_h))
+    except Exception:
+        pass
+
 class _ImageWorker(QObject):
     done = pyqtSignal(str, QImage, bool, str)
 
@@ -147,6 +183,23 @@ class ImageService(QObject):
         self._assumed_colorspace = 'sRGB'  # ICC 미탑재/무시 시 가정 색공간
         self._preview_target = 'sRGB'      # sRGB | Display P3 | Adobe RGB
         self._fallback_policy = 'ignore'   # 'warn' | 'ignore' | 'force_sRGB'
+        # 디코드 메모리 상한(안전 스케일 기준), 전역에도 반영
+        try:
+            self._decode_memory_cap_mb = int(getattr(self, "_decode_memory_cap_mb", _DECODE_MEMORY_CAP_MB_DEFAULT))
+        except Exception:
+            self._decode_memory_cap_mb = _DECODE_MEMORY_CAP_MB_DEFAULT
+        try:
+            global _DECODE_MEMORY_CAP_MB
+            _DECODE_MEMORY_CAP_MB = int(self._decode_memory_cap_mb)
+        except Exception:
+            pass
+        # Qt 기본 256MB 할당 제한 완화(가능한 환경에서만)
+        try:
+            alloc_limit_mb = int(getattr(self, "_qimage_alloc_limit_mb", max(1024, _DECODE_MEMORY_CAP_MB)))
+            if hasattr(QImageReader, 'setAllocationLimit'):
+                QImageReader.setAllocationLimit(alloc_limit_mb)
+        except Exception:
+            pass
 
     def set_cache_limits(self, image_cache_max_bytes: int | None = None, scaled_cache_max_bytes: int | None = None) -> None:
         try:
@@ -164,7 +217,7 @@ class ImageService(QObject):
 
     def scan_directory(self, dir_path: str, current_image_path: str | None):
         image_files, cur_idx = scan_directory_util(dir_path, current_image_path)
-        # 뷰어 설정(정렬/숨김/자연정렬)에 따른 후처리 훅: 호출자가 속성 제공 시 적용
+        # 정렬 정책 고정: Windows 탐색기식(자연 정렬) 파일명 기준
         try:
             # QObject의 parent() 메서드를 통해 부모 뷰어를 가져온다.
             try:
@@ -174,53 +227,38 @@ class ImageService(QObject):
         except Exception:
             owner = None
         try:
-            viewer = owner if owner is not None else None
-            # 숨김/시스템 제외
-            if viewer is not None and bool(getattr(viewer, "_dir_exclude_hidden_system", True)):
-                def _is_hidden(p: str) -> bool:
-                    try:
-                        name = os.path.basename(p)
-                        if name.startswith('.'):
-                            return True
-                        if os.name == 'nt':
-                            try:
-                                import ctypes
-                                FILE_ATTRIBUTE_HIDDEN = 0x2
-                                FILE_ATTRIBUTE_SYSTEM = 0x4
-                                attrs = ctypes.windll.kernel32.GetFileAttributesW(ctypes.c_wchar_p(p))
-                                if attrs != -1 and (attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)):
-                                    return True
-                            except Exception:
-                                return False
-                        return False
-                    except Exception:
-                        return False
-                image_files = [p for p in image_files if not _is_hidden(p)]
-            # 정렬 방식 적용
-            sort_mode = str(getattr(viewer, "_dir_sort_mode", "metadata")) if viewer is not None else "metadata"
-            natural = bool(getattr(viewer, "_dir_natural_sort", True)) if viewer is not None else True
-            # 탐색기 정렬 선택 시 기준을 강제로 파일명으로 사용
-            if natural:
-                sort_mode = "name"
-            if sort_mode == 'name':
+            # 숨김/시스템 파일은 항상 제외 (설정 무시, 보안/일관성 강제)
+            def _is_hidden(p: str) -> bool:
                 try:
-                    base_names = [(os.path.basename(p), p) for p in image_files]
-                    if natural:
-                        # Windows 탐색기식 정렬을 OS 무관하게 사용(가능한 경우)
-                        from ..utils.file_utils import windows_style_sort_key
-                        import functools
-                        base_names.sort(key=functools.cmp_to_key(lambda a,b: windows_style_sort_key(a[0], b[0])))
-                        image_files = [p for (_, p) in base_names]
-                    else:
-                        image_files = sorted(image_files, key=lambda p: os.path.basename(p).lower())
+                    name = os.path.basename(p)
+                    if name.startswith('.'):
+                        return True
+                    if os.name == 'nt':
+                        try:
+                            import ctypes
+                            FILE_ATTRIBUTE_HIDDEN = 0x2
+                            FILE_ATTRIBUTE_SYSTEM = 0x4
+                            attrs = ctypes.windll.kernel32.GetFileAttributesW(ctypes.c_wchar_p(p))
+                            if attrs != -1 and (attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)):
+                                return True
+                        except Exception:
+                            return False
+                    return False
                 except Exception:
-                    try:
-                        image_files = sorted(image_files, key=lambda p: os.path.basename(p).lower())
-                    except Exception:
-                        pass
-            else:
-                # 메타데이터 모드: file_utils에서 기본(EXIF 우선) 정렬 적용됨
-                image_files = list(image_files)
+                    return False
+            image_files = [p for p in image_files if not _is_hidden(p)]
+            # 정렬 방식 고정: 파일명(자연 정렬)
+            try:
+                base_names = [(os.path.basename(p), p) for p in image_files]
+                from ..utils.file_utils import windows_style_sort_key
+                import functools
+                base_names.sort(key=functools.cmp_to_key(lambda a,b: windows_style_sort_key(a[0], b[0])))
+                image_files = [p for (_, p) in base_names]
+            except Exception:
+                try:
+                    image_files = sorted(image_files, key=lambda p: os.path.basename(p).lower())
+                except Exception:
+                    pass
             # 현재 인덱스 재계산
             try:
                 if current_image_path and image_files:
@@ -765,6 +803,11 @@ class ImageService(QObject):
     def _read_qimage_with_exif_auto_transform_with_policy(self, path: str) -> tuple[QImage, bool, str]:
         reader = QImageReader(path)
         reader.setAutoTransform(True)
+        # 초대형 이미지에 대해 안전 스케일 적용
+        try:
+            _apply_safe_scaled_size_for_reader(reader, int(getattr(self, '_decode_memory_cap_mb', _DECODE_MEMORY_CAP_MB)))
+        except Exception:
+            pass
         img = reader.read()
         if img.isNull():
             try:
@@ -783,6 +826,11 @@ def _read_qimage_with_exif_auto_transform(path: str) -> tuple[QImage, bool, str]
     reader = QImageReader(path)
     # EXIF Orientation 등 자동 변환 활성화
     reader.setAutoTransform(True)
+    # 초대형 이미지에 대해 안전 스케일 적용(프리로드 작업 등 공용 경로)
+    try:
+        _apply_safe_scaled_size_for_reader(reader, _DECODE_MEMORY_CAP_MB)
+    except Exception:
+        pass
     img = reader.read()
     if img.isNull():
         try:

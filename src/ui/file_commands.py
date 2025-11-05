@@ -304,6 +304,10 @@ def open_folder(viewer: "JusawiViewer") -> None:
     if 0 <= viewer.current_image_index < len(viewer.image_files_in_dir):
         viewer.load_image(viewer.image_files_in_dir[viewer.current_image_index], source='open_folder')
     else:
+        try:
+            viewer.clear_display()
+        except Exception:
+            pass
         viewer.statusBar().showMessage("폴더에 표시할 이미지가 없습니다.", 3000)
     try:
         if os.path.isdir(dir_path):

@@ -22,8 +22,11 @@ def handle_dropped_folders(owner, folders):
     if 0 <= owner.current_image_index < len(owner.image_files_in_dir):
         owner.load_image(owner.image_files_in_dir[owner.current_image_index])
     else:
+        try:
+            owner.clear_display()
+        except Exception:
+            pass
         owner.statusBar().showMessage("폴더에 표시할 이미지가 없습니다.", 3000)
-
 
 def drag_enter(owner, event):
     ev.drag_enter(owner, event)
