@@ -51,24 +51,30 @@ class NaturalSearchDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("자연어 검색")
         self._files = files or []
-        # 뷰어 설정 기반 모델/키 전달
+        # 뷰어 설정 기반 OpenAI 모델/키 전달
         try:
             viewer = parent
         except Exception:
             viewer = None
         try:
+            model = str(getattr(viewer, "_embed_model", "text-embedding-3-small")) if viewer is not None else "text-embedding-3-small"
+        except Exception:
+            model = "text-embedding-3-small"
+        try:
+            api_key = str(getattr(viewer, "_ai_openai_api_key", "")) if viewer is not None else ""
+            if not api_key:
+                api_key = None
+        except Exception:
+            api_key = None
+        try:
             tag_w = int(getattr(viewer, "_search_tag_weight", 2)) if viewer is not None else 2
         except Exception:
             tag_w = 2
         try:
-            image_batch = int(getattr(viewer, "_embed_batch_size", 32)) if viewer is not None else 32
+            vmodel = str(getattr(viewer, "_verify_model", "gpt-5-nano")) if viewer is not None else "gpt-5-nano"
         except Exception:
-            image_batch = 32
-        try:
-            model_path = str(getattr(viewer, "_search_clip_model_dir")) if viewer is not None and getattr(viewer, "_search_clip_model_dir", "") else None
-        except Exception:
-            model_path = None
-        self._index = OnlineEmbeddingIndex(model_path=model_path, tag_weight=tag_w, image_batch=image_batch)
+            vmodel = "gpt-5-nano"
+        self._index = OnlineEmbeddingIndex(model=model, api_key=api_key, tag_weight=tag_w, verify_model=vmodel)
         self._thread: QThread | None = None
         self._worker: _SearchWorker | None = None
         self._pix_cache: dict[str, object] = {}

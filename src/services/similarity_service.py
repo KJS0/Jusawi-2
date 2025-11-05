@@ -95,7 +95,8 @@ class SimilarityIndex:
                 self._ensure_model()
                 with Image.open(path) as im:
                     im = im.convert("RGB")
-                    v = self._model.encode(im, convert_to_numpy=True, normalize_embeddings=True)  # type: ignore
+                    # 일부 SentenceTransformer 버전은 images= 키워드를 받지 않으므로 리스트로 첫 인자 전달
+                    v = self._model.encode([im], convert_to_numpy=True, normalize_embeddings=True)  # type: ignore
                 return np.asarray(v, dtype=np.float32)
             elif _HAS_OFFLINE:
                 try:

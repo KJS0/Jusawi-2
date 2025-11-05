@@ -73,7 +73,26 @@ class VerifierService:
         # OpenAI 클라이언트 재사용(keep-alive)
         try:
             from openai import OpenAI  # type: ignore
-            self._client = OpenAI(api_key=self._api_key, timeout=self._timeout_s)
+            import httpx  # type: ignore
+            # 환경 프록시 자동 감지 (httpx 0.28+ API)
+            http_client = None
+            try:
+                hp = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
+                sp = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+                ap = os.getenv("ALL_PROXY") or os.getenv("all_proxy")
+                if ap:
+                    http_client = httpx.Client(proxy=ap, timeout=self._timeout_s)
+                elif hp or sp:
+                    mounts = {}
+                    if hp:
+                        mounts["http://"] = httpx.HTTPTransport(proxy=hp)
+                    if sp:
+                        mounts["https://"] = httpx.HTTPTransport(proxy=sp)
+                    if mounts:
+                        http_client = httpx.Client(mounts=mounts, timeout=self._timeout_s)
+            except Exception:
+                http_client = None
+            self._client = OpenAI(api_key=self._api_key, http_client=http_client) if http_client is not None else OpenAI(api_key=self._api_key, timeout=self._timeout_s)
         except Exception:
             self._client = None  # type: ignore
 
@@ -196,10 +215,29 @@ class VerifierService:
 
         import base64
         from openai import OpenAI  # type: ignore
+        import httpx  # type: ignore
         timeout_s = float(getattr(self, "_timeout_s", 10.0))
         top_p = float(getattr(self, "_top_p", 1.0))
         n = max(1, min(8, int(getattr(self, "_n", 1))))
-        client = OpenAI(api_key=self._api_key, timeout=timeout_s)
+        # 프록시 감지 및 주입
+        try:
+            hp = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
+            sp = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+            ap = os.getenv("ALL_PROXY") or os.getenv("all_proxy")
+            http_client = None
+            if ap:
+                http_client = httpx.Client(proxy=ap, timeout=timeout_s)
+            elif hp or sp:
+                mounts = {}
+                if hp:
+                    mounts["http://"] = httpx.HTTPTransport(proxy=hp)
+                if sp:
+                    mounts["https://"] = httpx.HTTPTransport(proxy=sp)
+                if mounts:
+                    http_client = httpx.Client(mounts=mounts, timeout=timeout_s)
+            client = OpenAI(api_key=self._api_key, http_client=http_client) if http_client is not None else OpenAI(api_key=self._api_key, timeout=timeout_s)
+        except Exception:
+            client = OpenAI(api_key=self._api_key, timeout=timeout_s)
         b64 = base64.b64encode(img).decode("ascii")
         messages = [
             {"role": "system", "content": system_msg},

@@ -90,19 +90,27 @@ def _build_doc_for_image(path: str) -> str:
 
 
 class OnlineEmbeddingIndex:
-    """M-CLIP 기반 자연어 → 이미지 검색 인덱스."""
+    """OpenAI 임베딩 기반 자연어 → 이미지 검색 인덱스."""
 
-    _DEFAULT_MODEL_NAME = "M-CLIP/XLM-Roberta-Large-Vit-B-32"
+    # 기본값: 호환성이 높은 멀티링구얼 CLIP (SentenceTransformers 포맷)
+    # 텍스트/이미지 인코더를 분리: 텍스트는 멀티링구얼, 이미지는 CLIP ViT-B/32
+    _DEFAULT_TEXT_MODEL = "sentence-transformers/clip-ViT-B-32-multilingual-v1"
+    _DEFAULT_IMAGE_MODEL = "clip-ViT-B-32"
 
     def __init__(
         self,
-        model_path: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
         tag_weight: int | None = None,
+        verify_model: str | None = None,
+        embed_batch: int | None = None,
+        # 호환 파라미터(무시): 이전 M-CLIP 경로 인자들
+        model_path: str | None = None,
+        text_model_path: str | None = None,
+        image_model_path: str | None = None,
         image_batch: int | None = None,
         text_batch: int | None = None,
     ) -> None:
-        if not _HAS_ST:
-            raise RuntimeError("sentence-transformers 패키지를 설치해야 자연어 검색을 사용할 수 있습니다.")
 
         base_dir = os.path.join(os.path.expanduser("~"), ".jusawi")
         try:
@@ -111,10 +119,21 @@ class OnlineEmbeddingIndex:
             pass
 
         self._db_path = os.path.join(base_dir, "online_embed.sqlite3")
-        self._requested_model_path = model_path
-        self._model: SentenceTransformer | None = None
-        self._model_source: Optional[str] = None
-        self._model_signature = f"mclip::{self._DEFAULT_MODEL_NAME}"
+        self._model = (model or "text-embedding-3-small").strip() or "text-embedding-3-small"
+        self._api_key = api_key or None
+        try:
+            self._tag_weight = float(tag_weight if tag_weight is not None else 2.0)
+        except Exception:
+            self._tag_weight = 2.0
+        if self._tag_weight < 0:
+            self._tag_weight = 0.0
+        self._verify_model = str(verify_model or "gpt-5-nano")
+        try:
+            self._text_batch_size = max(1, int(embed_batch if embed_batch is not None else 64))
+        except Exception:
+            self._text_batch_size = 64
+        # 모델 시그니처(캐시 구분)
+        self._model_signature = f"openai::{self._model}|tagw={int(self._tag_weight)}"
 
         try:
             self._tag_weight = float(tag_weight if tag_weight is not None else 2.0)
@@ -136,47 +155,97 @@ class OnlineEmbeddingIndex:
         self._ensure_db()
 
     # ------------------------------------------------------------------
-    # 모델 및 저장소 관리
+    # 저장소 관리
     # ------------------------------------------------------------------
-    def _resolve_model_path(self) -> str:
-        # 1) 호출 시 지정된 경로
+    def _resolve_text_model_paths(self) -> List[str]:
+        paths: List[str] = []
+        # 명시 경로 우선
+        if self._requested_text_model_path and os.path.isdir(self._requested_text_model_path):
+            paths.append(self._requested_text_model_path)
+        # 이전 단일 경로 호환
         if self._requested_model_path and os.path.isdir(self._requested_model_path):
-            return self._requested_model_path
-
-        # 2) 환경 변수
-        env_path = os.getenv("JUSAWI_MCLIP_MODEL")
-        if env_path and os.path.isdir(env_path):
-            self._requested_model_path = env_path
-            return env_path
-
-        # 3) 리포지토리 내 기본 경로 후보
+            paths.append(self._requested_model_path)
+        # 환경변수
+        env_txt = os.getenv("JUSAWI_CLIP_TEXT_MODEL")
+        if env_txt and os.path.isdir(env_txt):
+            paths.append(env_txt)
+        # 로컬 후보
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        candidates = [
-            os.path.join(repo_root, "models", "M-CLIP-XLMR-L-ViT-B-32"),
-            os.path.join(repo_root, "models", "M-CLIP-XLM-Roberta-Large-Vit-B-32"),
-            os.path.join(repo_root, "models", "M-CLIP"),
-        ]
-        for cand in candidates:
-            if os.path.isdir(cand):
-                self._requested_model_path = cand
-                return cand
+        for name in [
+            "clip-ViT-B-32-multilingual-v1",
+            "M-CLIP-XLMR-L-ViT-B-32",
+            "M-CLIP-XLM-Roberta-Large-Vit-B-32",
+        ]:
+            p = os.path.join(repo_root, "models", name)
+            if os.path.isdir(p):
+                paths.append(p)
+        # 허브 이름(우선순위)
+        paths.extend([
+            self._DEFAULT_TEXT_MODEL,
+            "M-CLIP/XLM-Roberta-Large-Vit-B-32",
+        ])
+        return paths
 
-        # 4) 모델 이름(허브에서 자동 다운로드)
-        return self._DEFAULT_MODEL_NAME
+    def _resolve_image_model_paths(self) -> List[str]:
+        paths: List[str] = []
+        if self._requested_image_model_path and os.path.isdir(self._requested_image_model_path):
+            paths.append(self._requested_image_model_path)
+        if self._requested_model_path and os.path.isdir(self._requested_model_path):
+            paths.append(self._requested_model_path)
+        env_img = os.getenv("JUSAWI_CLIP_IMAGE_MODEL")
+        if env_img and os.path.isdir(env_img):
+            paths.append(env_img)
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        for name in [
+            "clip-ViT-B-32",
+            "clip-ViT-B-32-laion2B-s34B-b79K",  # 일부 배포 변형
+        ]:
+            p = os.path.join(repo_root, "models", name)
+            if os.path.isdir(p):
+                paths.append(p)
+        paths.extend([
+            self._DEFAULT_IMAGE_MODEL,
+            "sentence-transformers/clip-ViT-B-32",
+        ])
+        return paths
 
-    def _ensure_model(self) -> None:
-        if self._model is not None:
+    def _ensure_models(self) -> None:
+        if self._text_model is not None and self._image_model is not None:
             return
         if not _HAS_ST:
             raise RuntimeError("sentence-transformers 패키지를 찾을 수 없습니다.")
-        source = self._resolve_model_path()
-        self._model = SentenceTransformer(source)  # type: ignore[arg-type]
-        self._model_source = source
-        if os.path.isdir(source):
-            base = os.path.basename(source.rstrip(os.sep))
-            self._model_signature = f"mclip::{base}"
-        else:
-            self._model_signature = f"mclip::{source}"
+
+        last_err: Exception | None = None
+        # 텍스트 모델 로드
+        if self._text_model is None:
+            for src in self._resolve_text_model_paths():
+                try:
+                    self._text_model = SentenceTransformer(src)  # type: ignore[arg-type]
+                    self._text_model_source = src
+                    break
+                except Exception as e:
+                    last_err = e
+                    continue
+        # 이미지 모델 로드
+        if self._image_model is None:
+            for src in self._resolve_image_model_paths():
+                try:
+                    self._image_model = SentenceTransformer(src)  # type: ignore[arg-type]
+                    self._image_model_source = src
+                    break
+                except Exception as e:
+                    last_err = e
+                    continue
+
+        if self._text_model is None or self._image_model is None:
+            raise RuntimeError(f"모델 로드 실패: {last_err}")
+
+        # 시그니처 구성(캐시 무효화 기준)
+        tname = self._text_model_source if self._text_model_source else self._DEFAULT_TEXT_MODEL
+        iname = self._image_model_source if self._image_model_source else self._DEFAULT_IMAGE_MODEL
+        def _base(n: str) -> str:
+            return os.path.basename(n.rstrip(os.sep)) if os.path.isdir(n) else n
+        self._model_signature = f"mclip::{_base(iname)}|{_base(tname)}"
 
     def _ensure_db(self) -> None:
         con = sqlite3.connect(self._db_path)
@@ -219,7 +288,7 @@ class OnlineEmbeddingIndex:
             con.close()
 
     # ------------------------------------------------------------------
-    # 임베딩 유틸리티
+    # 임베딩/색인/검색
     # ------------------------------------------------------------------
     def _get_mtime(self, path: str) -> int:
         try:
@@ -230,78 +299,42 @@ class OnlineEmbeddingIndex:
     def _embed_texts(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
-        self._ensure_model()
+        if not self._api_key:
+            raise RuntimeError("OPENAI_API_KEY 없음")
+        # proxies 환경(HTTP(S)_PROXY/ALL_PROXY) 자동 감지 → httpx 클라이언트로 주입
         try:
-            batch = min(self._text_batch_size, max(1, len(texts)))
+            from openai import OpenAI  # type: ignore
+            import httpx  # type: ignore
+        except Exception as e:
+            raise RuntimeError(f"openai/httpx 로드 실패: {e}")
+
+        # httpx 0.28+: proxies 인자 제거됨 → proxy 또는 mounts 사용
+        http_client = None
+        try:
+            hp = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
+            sp = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+            ap = os.getenv("ALL_PROXY") or os.getenv("all_proxy")
+            if ap:
+                http_client = httpx.Client(proxy=ap, timeout=30.0)
+            elif hp or sp:
+                mounts = {}
+                if hp:
+                    mounts["http://"] = httpx.HTTPTransport(proxy=hp)
+                if sp:
+                    mounts["https://"] = httpx.HTTPTransport(proxy=sp)
+                if mounts:
+                    http_client = httpx.Client(mounts=mounts, timeout=30.0)
         except Exception:
-            batch = max(1, len(texts))
-        arr = self._model.encode(  # type: ignore[union-attr]
-            texts,
-            batch_size=batch,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
-        return [[float(x) for x in vec.tolist()] for vec in arr]
+            http_client = None
 
-    def _embed_images(self, paths: List[str]) -> List[Optional[List[float]]]:
-        outputs: List[Optional[List[float]]] = [None] * len(paths)
-        if Image is None:
-            return outputs
-        if not paths:
-            return outputs
+        client = OpenAI(api_key=self._api_key, http_client=http_client) if http_client is not None else OpenAI(api_key=self._api_key, timeout=30.0)
+        resp = client.embeddings.create(model=self._model, input=texts)
+        out: List[List[float]] = []
+        for item in resp.data:
+            out.append(list(item.embedding))
+        return out
 
-        self._ensure_model()
-        loaded_images = []
-        indices = []
-        for idx, path in enumerate(paths):
-            try:
-                with Image.open(path) as im:  # type: ignore[arg-type]
-                    img = im.convert("RGB").copy()
-                loaded_images.append(img)
-                indices.append(idx)
-            except Exception:
-                continue
-
-        if not loaded_images:
-            return outputs
-
-        try:
-            batch = min(self._image_batch_size, max(1, len(loaded_images)))
-        except Exception:
-            batch = max(1, len(loaded_images))
-
-        try:
-            arr = self._model.encode(  # type: ignore[union-attr]
-                images=loaded_images,
-                batch_size=batch,
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-            )
-            for idx, vec in zip(indices, arr):
-                outputs[idx] = [float(x) for x in vec.tolist()]
-        finally:
-            for img in loaded_images:
-                try:
-                    img.close()
-                except Exception:
-                    pass
-
-        return outputs
-
-    def _combine_vectors(self, base: Optional[List[float]], meta: Optional[List[float]]) -> List[float]:
-        if not base:
-            return []
-        if not meta or len(base) != len(meta):
-            return [float(x) for x in base]
-        # 태그 가중치를 0~1 범위로 변환(기본 0.5)
-        weight = max(0.0, min(1.0, 0.25 * self._tag_weight))
-        if weight <= 0.0:
-            return [float(x) for x in base]
-        combined = [float((1.0 - weight) * a + weight * b) for a, b in zip(base, meta)]
-        norm = math.sqrt(sum(x * x for x in combined))
-        if norm > 0:
-            return [float(x / norm) for x in combined]
-        return [float(x) for x in base]
+    # 이미지 임베딩/블렌딩은 OpenAI 텍스트 방식에선 사용하지 않음
 
     # ------------------------------------------------------------------
     # 색인 & 검색
@@ -343,9 +376,9 @@ class OnlineEmbeddingIndex:
 
         created = 0
         try:
-            batch = int(batch_size if batch_size is not None else self._image_batch_size)
+            batch = int(batch_size if batch_size is not None else self._text_batch_size)
         except Exception:
-            batch = self._image_batch_size
+            batch = self._text_batch_size
 
         total = len(pending)
         i = 0
@@ -353,29 +386,21 @@ class OnlineEmbeddingIndex:
             if callable(is_cancelled) and is_cancelled():
                 break
             chunk = pending[i : i + batch]
-            paths = [item[0] for item in chunk]
             docs = [item[1] for item in chunk]
             if progress_cb:
                 try:
-                    progress_cb(
-                        min(90, int(10 + 60 * (i / max(1, total)))),
-                        f"이미지 임베딩 {i + 1}-{min(i + batch, total)}/{total}",
-                    )
+                    progress_cb(min(90, int(10 + 60 * (i / max(1, total)))), f"문서 임베딩 {i + 1}-{min(i + batch, total)}/{total}")
                 except Exception:
                     pass
 
-            img_vecs = self._embed_images(paths)
-            text_vecs = self._embed_texts(docs) if self._tag_weight > 0 else [None] * len(chunk)
+            text_vecs = self._embed_texts(docs)
 
             con = sqlite3.connect(self._db_path)
             try:
                 cur = con.cursor()
                 for idx, (path, doc, mt) in enumerate(chunk):
-                    ivec = img_vecs[idx] if idx < len(img_vecs) else None
-                    if not ivec:
-                        continue
                     tvec = text_vecs[idx] if idx < len(text_vecs) else None
-                    final_vec = self._combine_vectors(ivec, tvec)
+                    final_vec = tvec or []
                     if not final_vec:
                         continue
                     try:
@@ -535,15 +560,79 @@ class OnlineEmbeddingIndex:
 
         scored.sort(key=lambda x: x[1], reverse=True)
 
-        if top_k is not None and top_k > 0:
-            scored = scored[:min(top_k, len(scored))]
+        # 2차: GPT 비전 바이너리 재검증(전체 후보)
+        try:
+            from .verifier_service import VerifierService  # type: ignore
+        except Exception:
+            VerifierService = None  # type: ignore
 
+        if VerifierService is None or not self._api_key:
+            if top_k is not None and top_k > 0:
+                scored = scored[:min(top_k, len(scored))]
+            if progress_cb:
+                try:
+                    progress_cb(100, "완료")
+                except Exception:
+                    pass
+            return scored
+
+        if progress_cb:
+            try:
+                progress_cb(75, "최종 필터링")
+            except Exception:
+                pass
+
+        try:
+            import concurrent.futures as _fut
+        except Exception:
+            _fut = None  # type: ignore
+        workers = 32
+        final: List[Tuple[str, float]] = []
+        tasks: List[Tuple[int, str]] = [(i, scored[i][0]) for i in range(len(scored))]
+        verifier = VerifierService(api_key=self._api_key, model=self._verify_model)
+        if _fut is not None and workers > 1:
+            with _fut.ThreadPoolExecutor(max_workers=workers) as ex:
+                fut_to_idx = {ex.submit(verifier.verify_binary, path, query_text): idx for idx, path in tasks}
+                done = 0
+                for fut in _fut.as_completed(fut_to_idx):
+                    idx = fut_to_idx[fut]
+                    path = scored[idx][0]
+                    try:
+                        r = fut.result()
+                        if bool(r.get("match", r.get("ok", False))):
+                            conf = float(r.get("confidence", 0.0))
+                            final.append((path, conf))
+                    except Exception:
+                        pass
+                    done += 1
+                    if progress_cb:
+                        try:
+                            base = 75
+                            span = 20
+                            progress_cb(base + int(span * (done / max(1, len(scored)))), "최종 필터링")
+                        except Exception:
+                            pass
+        else:
+            for i, path in tasks:
+                r = verifier.verify_binary(path, query_text)
+                if bool(r.get("match", r.get("ok", False))):
+                    conf = float(r.get("confidence", 0.0))
+                    final.append((path, conf))
+                if progress_cb:
+                    try:
+                        base = 75
+                        span = 20
+                        progress_cb(base + int(span * ((i + 1) / max(1, len(scored)))), "최종 필터링")
+                    except Exception:
+                        pass
+        final.sort(key=lambda x: x[1], reverse=True)
+        if top_k is not None and top_k > 0:
+            final = final[:min(top_k, len(final))]
         if progress_cb:
             try:
                 progress_cb(100, "완료")
             except Exception:
                 pass
-
-        return scored
+        return final
 
 

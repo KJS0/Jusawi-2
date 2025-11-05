@@ -242,6 +242,13 @@ def _export_viewer_to_yaml(viewer: Any) -> None:  # noqa: ANN401
             "dir": str(getattr(viewer, "_thumb_cache_dir", "")),
         }
         # ai
+        # 기존 config.yaml의 키를 보존하기 위해 현재 값이 비어있을 경우 과거 값을 유지한다
+        try:
+            _prev_yaml = _load_yaml_configs()
+            _prev_ai = _prev_yaml.get("ai", {}) if isinstance(_prev_yaml, dict) else {}
+            _prev_openai_key = str(_prev_ai.get("openai_api_key", "")) if isinstance(_prev_ai.get("openai_api_key"), str) else ""
+        except Exception:
+            _prev_openai_key = ""
         cfg["ai"] = {
             "auto_on_open": bool(getattr(viewer, "_auto_ai_on_open", False)),
             "auto_on_drop": bool(getattr(viewer, "_auto_ai_on_drop", False)),
@@ -257,7 +264,11 @@ def _export_viewer_to_yaml(viewer: Any) -> None:  # noqa: ANN401
             "exif_level": str(getattr(viewer, "_ai_exif_level", "full")),
             "retry_count": int(getattr(viewer, "_ai_retry_count", 2)),
             "retry_delay_ms": int(getattr(viewer, "_ai_retry_delay_ms", 800)),
-            "openai_api_key": str(getattr(viewer, "_ai_openai_api_key", "")),
+            "openai_api_key": (
+                str(getattr(viewer, "_ai_openai_api_key", ""))
+                if str(getattr(viewer, "_ai_openai_api_key", "")).strip()
+                else _prev_openai_key
+            ),
             "http_timeout_s": float(getattr(getattr(viewer, "_ai_cfg", None), "http_timeout_s", 120.0) if hasattr(viewer, "_ai_cfg") else 120.0),
             # 확장 설정
             "conf_threshold_pct": int(getattr(viewer, "_ai_conf_threshold_pct", 80)),
@@ -626,6 +637,8 @@ def load_settings(viewer) -> None:
             if hasattr(viewer, "settings"):
                 # reset_to_100 강제 비움
                 viewer.settings.remove("keys/custom/reset_to_100")
+                # 색상보기 A/B 토글 키 비활성화: 사용자 커스텀 매핑 제거
+                viewer.settings.remove("keys/custom/toggle_color_ab")
                 # rotate_180에 숫자 '2'가 저장되어 있으면 제거
                 try:
                     raw = str(viewer.settings.value("keys/custom/rotate_180", ""))

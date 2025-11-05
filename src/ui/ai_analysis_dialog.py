@@ -242,20 +242,7 @@ class AIAnalysisDialog(QDialog):
         # 인덱싱: 생성된 태그/주제를 자연어 검색 인덱스에 반영
         try:
             from ..services.online_search_service import OnlineEmbeddingIndex  # type: ignore
-            viewer = getattr(self, "_viewer", None)
-            try:
-                model_dir = str(getattr(viewer, "_search_clip_model_dir")) if viewer is not None and getattr(viewer, "_search_clip_model_dir", "") else None
-            except Exception:
-                model_dir = None
-            try:
-                tag_weight = int(getattr(viewer, "_search_tag_weight", 2)) if viewer is not None else 2
-            except Exception:
-                tag_weight = 2
-            try:
-                image_batch = int(getattr(viewer, "_embed_batch_size", 32)) if viewer is not None else 32
-            except Exception:
-                image_batch = 32
-            idx = OnlineEmbeddingIndex(model_path=model_dir, tag_weight=tag_weight, image_batch=image_batch)
+            idx = OnlineEmbeddingIndex()
             tags = [str(t) for t in (self._data.get("tags") or [])]
             subj = [str(s) for s in (self._data.get("subjects") or [])]
             sc = str(self._data.get("short_caption") or "")

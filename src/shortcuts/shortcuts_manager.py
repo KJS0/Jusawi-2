@@ -72,8 +72,8 @@ COMMANDS: List[Command] = [
     Command("anim_jump_back_10", "10프레임 뒤로", "애니메이션 10프레임 이전", "보기", "anim_jump_back_10", ["Shift+,"]),
     Command("anim_jump_forward_10", "10프레임 앞으로", "애니메이션 10프레임 다음", "보기", "anim_jump_forward_10", ["Shift+."]),
 
-    # 색상 보기 A/B 토글 (원본 vs sRGB/타깃 변환)
-    Command("toggle_color_ab", "원본/sRGB 보기 토글", "색상 보기 A/B 전환", "보기", "toggle_color_ab", ["C"]),
+    # 색상 보기 A/B 토글 (원본 vs sRGB/타깃 변환) — 단축키 비활성화
+    Command("toggle_color_ab", "원본/sRGB 보기 토글", "색상 보기 A/B 전환", "보기", "toggle_color_ab", []),
 
     # 정보/패널
     Command("toggle_info_panel", "정보 패널 토글", "우측 정보 패널 표시/숨김", "보기", "toggle_info_panel", ["I", "Ctrl+I"]),
@@ -145,6 +145,10 @@ def get_effective_keymap(settings) -> Dict[str, List[str]]:
     custom = _load_custom_keymap(settings)
     eff: Dict[str, List[str]] = {}
     for cmd in COMMANDS:
+        # 색상 A/B 토글은 단축키 비활성화(사용자 매핑도 무시)
+        if cmd.id == "toggle_color_ab":
+            eff[cmd.id] = []
+            continue
         # 고정키는 기본값 고정
         if cmd.lock_key:
             eff[cmd.id] = cmd.default_keys[:]
