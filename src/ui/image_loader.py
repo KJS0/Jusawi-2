@@ -31,6 +31,11 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
             pass
     except Exception:
         viewer._fullres_image = None
+    # 이전 파일의 애니메이션 여부 저장(탐색 시 상태 유지 정책 판단용)
+    try:
+        viewer._prev_was_animation = bool(getattr(viewer.image_display_area, "_is_animation", False))
+    except Exception:
+        viewer._prev_was_animation = False
     try:
         if getattr(viewer, "_movie", None):
             try:
@@ -43,6 +48,10 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
     viewer._movie = None
     try:
         is_anim, frame_count = viewer.image_service.probe_animation(path)
+        try:
+            viewer.log.debug(f"gif_probe | file={os.path.basename(path)} | is_anim={is_anim} | frames={frame_count}")
+        except Exception:
+            pass
         viewer.image_display_area.set_animation_state(is_anim, current_index=0, total_frames=frame_count)
         if is_anim:
             try:
@@ -55,6 +64,14 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
                 mv.frameChanged.connect(viewer._on_movie_frame)
                 viewer._movie = mv
                 try:
+                    is_valid = bool(mv.isValid())
+                except Exception:
+                    is_valid = True
+                try:
+                    viewer.log.debug(f"gif_qmovie_create | valid={is_valid} | frameCount={getattr(mv, 'frameCount', lambda: -1)()}")
+                except Exception:
+                    pass
+                try:
                     viewer._anim_timer.stop()
                 except Exception:
                     pass
@@ -64,20 +81,82 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
                         mv.setLoopCount(0 if bool(getattr(viewer, "_anim_loop", True)) else 1)
                     except Exception:
                         pass
-                    # 자동 재생 설정 반영(파일 전환 시 유지 옵션 고려)
-                    keep = bool(getattr(viewer, "_anim_keep_state_on_switch", False))
+                    # 자동 재생 설정 반영
+                    # '이동(nav)'에서만 재생 상태 유지 적용, 열기/드롭은 자동재생 우선
+                    keep = bool(getattr(viewer, "_anim_keep_state_on_switch", False)) and (source == "nav")
                     desired_play = bool(getattr(viewer, "_anim_autoplay", True))
                     if keep:
                         try:
-                            desired_play = bool(getattr(viewer, "_anim_is_playing", False))
+                            prev_anim = bool(getattr(viewer, "_prev_was_animation", False))
+                        except Exception:
+                            prev_anim = False
+                        if prev_anim:
+                            try:
+                                desired_play = bool(getattr(viewer, "_anim_is_playing", False))
+                            except Exception:
+                                desired_play = desired_play
+                        else:
+                            # 이전 파일이 JPG 등 정지 이미지였으면 자동재생 기준으로 시작
+                            desired_play = bool(getattr(viewer, "_anim_autoplay", True))
+                    if desired_play:
+                        # QMovie 유효성 검사: 실패 시 타이머 기반 폴백 재생
+                        try:
+                            is_valid = bool(viewer._movie.isValid())
+                        except Exception:
+                            is_valid = True
+                        if is_valid:
+                            try:
+                                pm0 = viewer._movie.currentPixmap()
+                                if pm0 and not pm0.isNull():
+                                    viewer.image_display_area.updatePixmapFrame(pm0)
+                            except Exception:
+                                pass
+                            try:
+                                viewer.log.debug(f"gif_qmovie_start | source={source}")
+                            except Exception:
+                                pass
+                            viewer._movie.start()
+                            viewer._anim_is_playing = True
+                        else:
+                            viewer._movie = None
+                            try:
+                                img0, ok0, _ = viewer.image_service.load_frame(path, 0)
+                            except Exception:
+                                img0, ok0 = None, False
+                            if ok0 and img0 and not img0.isNull():
+                                try:
+                                    viewer.image_display_area.setPixmap(QPixmap.fromImage(img0))
+                                except Exception:
+                                    pass
+                                try:
+                                    viewer.image_display_area.set_animation_state(True, 0, frame_count)
+                                except Exception:
+                                    pass
+                            try:
+                                try:
+                                    viewer.log.debug(f"gif_timer_fallback_start | source={source}")
+                                except Exception:
+                                    pass
+                                viewer._anim_timer.start()
+                            except Exception:
+                                pass
+                            viewer._anim_is_playing = True
+                    else:
+                        # 정지 상태 유지하되 첫 프레임은 표시
+                        try:
+                            pm0 = viewer._movie.currentPixmap()
+                            if pm0 and not pm0.isNull():
+                                viewer.image_display_area.updatePixmapFrame(pm0)
                         except Exception:
                             pass
-                    if desired_play:
-                        viewer._movie.start()
-                        viewer._anim_is_playing = True
-                    else:
-                        # 정지 상태 유지
-                        viewer._movie.stop()
+                        try:
+                            try:
+                                viewer.log.debug("gif_qmovie_stop_initial")
+                            except Exception:
+                                pass
+                            viewer._movie.stop()
+                        except Exception:
+                            pass
                         viewer._anim_is_playing = False
                 except Exception:
                     viewer._anim_is_playing = False

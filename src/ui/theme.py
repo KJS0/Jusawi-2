@@ -158,4 +158,24 @@ def apply_ui_theme_and_spacing(viewer) -> None:
     except Exception:
         pass
 
+    # QToolTip 전역 스타일(어두운 배경 위 가독성 확보: 흰 글자)
+    try:
+        from PyQt6.QtWidgets import QApplication  # type: ignore
+        app = QApplication.instance()
+        if app is not None:
+            prev = app.styleSheet() or ""
+            tooltip_css = (
+                " QToolTip {"
+                " color: #FFFFFF;"
+                " background-color: rgba(0,0,0,200);"
+                " border: 1px solid #777777;"
+                " padding: 4px 6px;"
+                " }"
+            )
+            # 중복 추가 방지
+            if "QToolTip" not in prev:
+                app.setStyleSheet(prev + tooltip_css)
+    except Exception:
+        pass
+
 

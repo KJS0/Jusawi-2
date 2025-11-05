@@ -546,8 +546,12 @@ class ImageService(QObject):
         try:
             # 캐시 우선
             cached = self._anim_frame_count.get(path)
-            if isinstance(cached, int) and cached > 1:
-                return True, cached
+            if isinstance(cached, int):
+                # 0: 비애니메이션(확정), >1: 프레임 수(애니메이션)
+                if cached == 0:
+                    return False, -1
+                if cached > 1:
+                    return True, cached
             reader = QImageReader(path)
             is_anim = False
             frame_count = -1
@@ -555,6 +559,10 @@ class ImageService(QObject):
             try:
                 if hasattr(reader, 'supportsAnimation'):
                     is_anim = bool(reader.supportsAnimation())
+                    try:
+                        _log.debug(f"anim_supports | file={os.path.basename(path)} | supports={is_anim}")
+                    except Exception:
+                        pass
             except Exception:
                 pass
             # imageCount 시도(일부 포맷은 0 또는 1 반환)
@@ -563,6 +571,10 @@ class ImageService(QObject):
                 if c > 1:
                     frame_count = c
                     is_anim = True
+                try:
+                    _log.debug(f"anim_image_count | file={os.path.basename(path)} | count={c}")
+                except Exception:
+                    pass
             except Exception:
                 pass
             # 확장자 힌트
@@ -570,6 +582,10 @@ class ImageService(QObject):
                 ext = os.path.splitext(path)[1].lower()
                 if ext in ('.gif', '.webp'):
                     is_anim = True
+                    try:
+                        _log.debug(f"anim_ext_hint | file={os.path.basename(path)} | ext={ext}")
+                    except Exception:
+                        pass
             # 필요한 경우 프레임 수 직접 계수(한 번만)
             if is_anim and (frame_count is None or frame_count <= 1):
                 try:
@@ -586,12 +602,25 @@ class ImageService(QObject):
                                 break
                             count += 1
                     frame_count = count if count > 1 else -1
+                    try:
+                        _log.debug(f"anim_count_scan | file={os.path.basename(path)} | frames={frame_count}")
+                    except Exception:
+                        pass
                 except Exception:
                     frame_count = -1
-            # 캐시 저장
-            if isinstance(frame_count, int):
-                self._anim_frame_count[path] = frame_count
-            return bool(is_anim), int(frame_count)
+            # 캐시 저장(비애니메이션은 0으로 표시하여 재탐색 억제)
+            try:
+                cache_val = int(frame_count) if (isinstance(frame_count, int) and frame_count > 1) else 0
+            except Exception:
+                cache_val = 0
+            self._anim_frame_count[path] = cache_val
+            try:
+                _log.debug(f"anim_probe_result | file={os.path.basename(path)} | is_anim={is_anim} | frames={frame_count}")
+            except Exception:
+                pass
+            if cache_val == 0:
+                return False, -1
+            return True, cache_val
         except Exception:
             return False, -1
 

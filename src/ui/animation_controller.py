@@ -85,6 +85,11 @@ def toggle_play(viewer: "JusawiViewer") -> None:
     if not is_current_file_animation(viewer):
         return
     try:
+        try:
+            st = (getattr(viewer._movie, 'state', lambda: None)() if getattr(viewer, '_movie', None) else None)
+            viewer.log.debug(f"gif_toggle | movie_state={st} | playing={bool(getattr(viewer, '_anim_is_playing', False))}")
+        except Exception:
+            pass
         if viewer._movie:
             # 루프 설정이 바뀌었을 수 있으므로 매 토글 시 반영
             try:
@@ -106,6 +111,11 @@ def toggle_play(viewer: "JusawiViewer") -> None:
                 viewer._anim_timer.start()
             else:
                 viewer._anim_timer.stop()
+        try:
+            st2 = (getattr(viewer._movie, 'state', lambda: None)() if getattr(viewer, '_movie', None) else None)
+            viewer.log.debug(f"gif_toggle_done | movie_state={st2} | playing={bool(getattr(viewer, '_anim_is_playing', False))}")
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -160,6 +170,11 @@ def on_movie_frame(viewer: "JusawiViewer", frame_index: int) -> None:
             viewer.image_display_area.set_animation_state(True, frame_index, total)
             # 루프 해제 시 마지막 프레임에서 정지
             try:
+                try:
+                    if int(frame_index) == 0:
+                        viewer.log.debug("gif_frame0")
+                except Exception:
+                    pass
                 if not bool(getattr(viewer, "_anim_loop", True)):
                     # 우선 QMovie가 총 프레임을 알려줄 때
                     if isinstance(total, int) and total > 0:
@@ -169,6 +184,10 @@ def on_movie_frame(viewer: "JusawiViewer", frame_index: int) -> None:
                             except Exception:
                                 pass
                             viewer._anim_is_playing = False
+                            try:
+                                viewer.log.debug("gif_reached_last_frame_stop")
+                            except Exception:
+                                pass
                     else:
                         # 총 프레임이 미상인 경우: 래핑 감지(이전 인덱스보다 작아지면 루프)
                         prev = getattr(viewer.image_display_area, "_current_frame_index", 0)
@@ -178,6 +197,10 @@ def on_movie_frame(viewer: "JusawiViewer", frame_index: int) -> None:
                             except Exception:
                                 pass
                             viewer._anim_is_playing = False
+                            try:
+                                viewer.log.debug("gif_wrapped_stop")
+                            except Exception:
+                                pass
             except Exception:
                 pass
     except Exception:
