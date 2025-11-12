@@ -44,6 +44,9 @@ _PHASH_WORKERS_DEFAULT = 8
 _SUPPORTED = {'.jpg','.jpeg','.png','.webp','.bmp','.tif','.tiff','.gif'}
 
 def _cos(a: np.ndarray, b: np.ndarray) -> float:
+    # 벡터 모양 강제: (512,), (N,) 형태로 평탄화하여 내적 정렬 오류 방지
+    a = np.asarray(a, dtype=np.float32).ravel()
+    b = np.asarray(b, dtype=np.float32).ravel()
     na = np.linalg.norm(a) + 1e-9
     nb = np.linalg.norm(b) + 1e-9
     return float(np.dot(a, b) / (na * nb))
@@ -97,14 +100,21 @@ class SimilarityIndex:
                     im = im.convert("RGB")
                     # 일부 SentenceTransformer 버전은 images= 키워드를 받지 않으므로 리스트로 첫 인자 전달
                     v = self._model.encode([im], convert_to_numpy=True, normalize_embeddings=True)  # type: ignore
-                return np.asarray(v, dtype=np.float32)
+                arr = np.asarray(v, dtype=np.float32)
+                # (1, D) -> (D,)로 정규화
+                if arr.ndim == 2 and arr.shape[0] == 1:
+                    arr = arr[0]
+                return arr
             elif _HAS_OFFLINE:
                 try:
                     if self._offline is None:
                         self._offline = OfflineVerifierService()
                     vec = self._offline._get_or_compute_image_vec(path)  # type: ignore[attr-defined]
-                    if vec:
-                        return np.asarray(vec, dtype=np.float32)
+                    if vec is not None:
+                        arr = np.asarray(vec, dtype=np.float32)
+                        if arr.ndim == 2 and 1 in arr.shape:
+                            arr = arr.ravel()
+                        return arr
                 except Exception:
                     pass
             # offline 실패 시 pHash로 폴백 시도
@@ -358,6 +368,8 @@ class SimilarityIndex:
             if os.path.normcase(p) == os.path.normcase(anchor_path):
                 continue
             v = np.asarray(rec.get("vec") or [], dtype=np.float32)
+            if v.ndim > 1:
+                v = v.ravel()
             if v.size:
                 vecs.append(v)
                 paths.append(p)
@@ -374,6 +386,8 @@ class SimilarityIndex:
         q = self._vec_image(anchor_path)
         if q is None:
             return []
+        if q.ndim > 1:
+            q = q.ravel()
         qn = q / (np.linalg.norm(q) + 1e-9)
         labels, dists = index.knn_query(qn, k=min(top_k+5, Xn.shape[0]))
         out: List[Tuple[str,float]] = []

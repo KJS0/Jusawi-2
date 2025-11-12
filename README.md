@@ -17,3 +17,60 @@ Jusawi는 사진 뷰어 프로그램입니다.
 13. 유사 사진 검색 : 현재 사진과 비슷한 사진을 폴더에서 자동으로 찾아 보여줍니다.
 14. 필름 스트립 : 하단 고정 바에 현재 폴더의 사진 썸네일이 가로로 표시되며, 누르면 즉시 열람할 수 있습니다.
 15. 별점/플래그 바 : 필름 스트립 아래에 별 5개와 플래그 두 개(승낙/거절)를 한눈에 보고 클릭으로 바로 설정할 수 있습니다.
+
+## 실행법법
+1) Python 설치 (3.10~3.12, 권장 3.11)
+- [python.org 설치 페이지](https://www.python.org/downloads/)에서 최신 버전을 설치하세요.
+- 설치 중 "Add python.exe to PATH" 옵션을 꼭 체크하세요.
+
+2) 프로젝트 받기
+- ZIP 다운로드 후 압축 해제하거나, Git을 아신다면 `git clone`으로 받아도 됩니다.
+
+3) PowerShell 열기 → 폴더로 이동
+- 예: `cd C:\\Development\\Jusawi`
+
+4) 가상환경 만들기 및 활성화 (권장)
+
+```powershell
+python -m venv .venv
+./.venv/Scripts/Activate.ps1
+```
+
+5) 필수 프로그램 설치
+
+```powershell
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+6) 실행하기
+
+```powershell
+python main.py
+```
+
+## AI/지도 기능 설정
+
+- 첫 실행 후, 프로젝트 최상단에 `config.yaml` 파일이 자동으로 생성됩니다.
+- 아래처럼 키를 넣으면 AI 분석과 주소 표시 기능이 활성화됩니다.
+
+```yaml
+ai:
+  openai_api_key: "여기에 OpenAI API 키"
+
+map:
+  api_keys:
+    kakao: "카카오 REST API 키"
+    google: "구글 Maps Geocoding API 키"
+```
+
+- 키가 없어도 기본 사진 뷰어 기능은 정상 작동합니다.
+- 키 발급 안내
+  - OpenAI: [API 키 발급](https://platform.openai.com/api-keys)
+  - Kakao: [Kakao Developers](https://developers.kakao.com/)
+  - Google Maps: [Google Cloud Console](https://console.cloud.google.com/)
+
+## 추가 팁
+
+- 가상환경 종료: PowerShell에서 `deactivate`
+- 다음에 다시 실행할 때는 3) 폴더 이동 → 4) `Activate.ps1` → 6) 실행 순서만 하시면 됩니다.
