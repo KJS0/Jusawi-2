@@ -5,7 +5,7 @@ from typing import List, Tuple
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
-    QListWidget, QListWidgetItem, QMessageBox
+    QListWidget, QListWidgetItem, QMessageBox, QRadioButton, QButtonGroup
 )  # type: ignore[import]
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal  # type: ignore[import]
 from PyQt6.QtGui import QShortcut, QKeySequence  # type: ignore[import]
@@ -101,6 +101,26 @@ class NaturalSearchDialog(QDialog):
         except Exception:
             pass
 
+        # 검색 모드 선택: CLIP만 / CLIP + GPT 재검증
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("검색 모드"))
+        self.rb_clip_only = QRadioButton("CLIP만")
+        self.rb_clip_gpt = QRadioButton("CLIP + GPT 재검증")
+        self.rb_clip_only.setChecked(True)
+        # 라디오 버튼 텍스트 색을 직접 지정(일부 플랫폼에서 상위 규칙이 무시되는 경우 대비)
+        try:
+            self.rb_clip_only.setStyleSheet("color: #EAEAEA;")
+            self.rb_clip_gpt.setStyleSheet("color: #EAEAEA;")
+        except Exception:
+            pass
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.addButton(self.rb_clip_only)
+        self._mode_group.addButton(self.rb_clip_gpt)
+        mode_row.addWidget(self.rb_clip_only)
+        mode_row.addWidget(self.rb_clip_gpt)
+        mode_row.addStretch(1)
+        root.addLayout(mode_row)
+
         btn_row = QHBoxLayout()
         self.search_btn = QPushButton("검색")
         self.search_btn.clicked.connect(self._on_search)
@@ -194,6 +214,7 @@ class NaturalSearchDialog(QDialog):
             self.setStyleSheet(
                 "QDialog { background-color: #373737; color: #EAEAEA; }"
                 " QLabel { color: #EAEAEA; }"
+                " QRadioButton { color: #EAEAEA; }"
                 " QTextEdit { background-color: #2B2B2B; color: #EAEAEA; border: 1px solid #444; }"
                 " QComboBox, QSpinBox { background-color: #2B2B2B; color: #EAEAEA; border: 1px solid #444; }"
                 " QPushButton { color: #EAEAEA; background-color: transparent; border: 1px solid #555; padding: 4px 8px; border-radius: 4px; }"
@@ -233,6 +254,18 @@ class NaturalSearchDialog(QDialog):
             tk = len(self._files)
         if tk <= 0:
             tk = len(self._files)
+
+        # 라디오 선택에 따라 인덱스 모드 적용
+        try:
+            if self.rb_clip_only.isChecked():
+                setattr(self._index, "_clip_only", True)
+                setattr(self._index, "_disable_gpt_verify", True)
+            else:
+                setattr(self._index, "_clip_only", False)
+                # GPT 재검증 사용: API 키 없으면 자동으로 내부에서 비활성화됨
+                setattr(self._index, "_disable_gpt_verify", False)
+        except Exception:
+            pass
 
         self._worker = _SearchWorker(self._index, self._files, q, tk)
         self._worker.moveToThread(self._thread)

@@ -26,6 +26,13 @@ def build_top_and_status_bars(viewer) -> None:
     except Exception:
         pass
 
+    # 폴더 지도 버튼
+    viewer.map_button = QPushButton("지도")
+    try:
+        viewer.map_button.clicked.connect(viewer.open_folder_map_dialog)
+    except Exception:
+        pass
+
     # 로그 버튼 제거
 
     # EXIF 정보 버튼 제거됨
@@ -73,11 +80,15 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.rotate_left_button.clicked.connect(viewer.rotate_ccw_90)
     viewer.rotate_right_button.clicked.connect(viewer.rotate_cw_90)
 
+    viewer.comparsion_button = QPushButton("사진 비교")
+    viewer.comparsion_button.clicked.connect(viewer.open_comparsion_dialog)
+
     button_style = "color: #EAEAEA;"
     for btn in [
         viewer.open_button,
         viewer.recent_button,
         viewer.info_button,
+        viewer.map_button,
         viewer.ai_button,
         viewer.settings_button,
         viewer.fullscreen_button,
@@ -88,6 +99,7 @@ def build_top_and_status_bars(viewer) -> None:
         viewer.zoom_in_button,
         viewer.rotate_left_button,
         viewer.rotate_right_button,
+        viewer.comparsion_button,
     ]:
         btn.setStyleSheet(button_style)
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -96,9 +108,12 @@ def build_top_and_status_bars(viewer) -> None:
     viewer.button_layout.addWidget(viewer.recent_button)
     # 정보 버튼
     viewer.button_layout.addWidget(viewer.info_button)
+    # 지도 버튼
+    viewer.button_layout.addWidget(viewer.map_button)
     # EXIF 버튼 제거됨
     viewer.button_layout.addWidget(viewer.ai_button)
     # 배치 버튼 제거됨
+    viewer.button_layout.addWidget(viewer.comparsion_button)
     viewer.button_layout.addWidget(viewer.search_button)
     # Similar search button
     try:

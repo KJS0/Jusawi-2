@@ -274,16 +274,22 @@ def _get_osm_static_map_png(latitude: float, longitude: float, width: int = 640,
             "size": f"{w}x{h}",
             "markers": f"{float(latitude)},{float(longitude)},red-pushpin",
         }
-        resp = requests.get(url, params=params, timeout=6)
+        headers = {
+            # 일부 서버는 User-Agent 없으면 차단하거나 HTML을 반환
+            "User-Agent": "JusawiViewer/1.0 (+https://example.invalid)",
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
         if resp.status_code != 200:
             try:
                 logger.warning("map.static.osm.http | code=%s | reason=%s", resp.status_code, getattr(resp, 'reason', ''))
             except Exception:
                 pass
             return None
-        if "image" not in (resp.headers.get("Content-Type", "") or ""):
+        ct = (resp.headers.get("Content-Type", "") or "").lower()
+        if "image" not in ct:
             try:
-                logger.warning("map.static.osm.content_type | ct=%s", resp.headers.get("Content-Type", ""))
+                logger.warning("map.static.osm.content_type | ct=%s | url=%s", ct, getattr(resp, 'url', url))
             except Exception:
                 pass
             return None
@@ -389,6 +395,8 @@ def get_static_map_png(latitude: float, longitude: float, width: int = 640, heig
             except Exception:
                 pass
         return data or _try_osm()
+    if prov == 'osm':
+        return _try_osm()
 
     # 자동 선택
     if GeocodingService().is_korea_coordinate(latitude, longitude) and kakao_key:

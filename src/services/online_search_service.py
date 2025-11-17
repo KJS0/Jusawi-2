@@ -104,6 +104,9 @@ class OnlineEmbeddingIndex:
         tag_weight: int | None = None,
         verify_model: str | None = None,
         embed_batch: int | None = None,
+        # 신규: CLIP 전용 모드 및 GPT 재검증 비활성화
+        clip_only: bool | None = None,
+        disable_gpt_verify: bool | None = None,
         # 호환 파라미터(무시): 이전 M-CLIP 경로 인자들
         model_path: str | None = None,
         text_model_path: str | None = None,
@@ -134,6 +137,9 @@ class OnlineEmbeddingIndex:
             self._text_batch_size = 64
         # 모델 시그니처(캐시 구분)
         self._model_signature = f"openai::{self._model}|tagw={int(self._tag_weight)}"
+        # 신규 플래그: 기본값으로 CLIP 전용 활성화 및 GPT 재검증 비활성화
+        self._clip_only = bool(clip_only) if clip_only is not None else True
+        self._disable_gpt_verify = bool(disable_gpt_verify) if disable_gpt_verify is not None else True
 
         try:
             self._tag_weight = float(tag_weight if tag_weight is not None else 2.0)
@@ -513,54 +519,98 @@ class OnlineEmbeddingIndex:
         if not query_text.strip():
             return []
 
+        # CLIP 전용 경로: 완전 오프라인 검색(텍스트-이미지 CLIP 유사도)
+        if bool(getattr(self, "_clip_only", False)):
+            if progress_cb:
+                try:
+                    progress_cb(10, "CLIP 모델 준비")
+                except Exception:
+                    pass
+            try:
+                try:
+                    from .offline_verifier import OfflineVerifierService  # type: ignore
+                except Exception:
+                    OfflineVerifierService = None  # type: ignore
+                if OfflineVerifierService is None:
+                    return []
+                ofs = OfflineVerifierService()
+                # 가벼운 준비(엔진 로드 시도)
+                try:
+                    ofs.prepare()
+                except Exception:
+                    pass
+                if callable(is_cancelled) and is_cancelled():
+                    return []
+                if progress_cb:
+                    try:
+                        progress_cb(45, "임베딩 계산")
+                    except Exception:
+                        pass
+                tk = top_k if (top_k is not None and top_k > 0) else len(image_paths)
+                results = ofs.search_offline(image_paths=image_paths, query_text=query_text, top_k=int(max(1, tk)))
+                # CLIP 최소 점수(코사인) 필터링: 0.200 미만 제외
+                try:
+                    clip_min = float(getattr(self, "_clip_min_score", 0.2))
+                except Exception:
+                    clip_min = 0.2
+                results = [(p, s) for (p, s) in results if float(s) >= clip_min]
+                if progress_cb:
+                    try:
+                        progress_cb(100, "완료")
+                    except Exception:
+                        pass
+                return results
+            except Exception:
+                # CLIP 경로 실패 시 빈 결과 반환(네트워크 의존 방지)
+                return []
+
+        # CLIP + (옵션) GPT 재검증 경로: 오프라인 CLIP으로 1차 랭킹 후, 필요 시 GPT 적용
         if progress_cb:
             try:
-                progress_cb(5, "색인 확인")
+                progress_cb(15, "CLIP 모델 준비")
             except Exception:
                 pass
-
-        self.ensure_index(image_paths, progress_cb=progress_cb, is_cancelled=is_cancelled)
-
-        if callable(is_cancelled) and is_cancelled():
+        try:
+            try:
+                from .offline_verifier import OfflineVerifierService  # type: ignore
+            except Exception:
+                OfflineVerifierService = None  # type: ignore
+            if OfflineVerifierService is None:
+                return []
+            ofs = OfflineVerifierService()
+            try:
+                ofs.prepare()
+            except Exception:
+                pass
+            if callable(is_cancelled) and is_cancelled():
+                return []
+            if progress_cb:
+                try:
+                    progress_cb(45, "임베딩 계산")
+                except Exception:
+                    pass
+            tk_all = top_k if (top_k is not None and top_k > 0) else len(image_paths)
+            scored = ofs.search_offline(image_paths=image_paths, query_text=query_text, top_k=int(max(1, tk_all)))
+        except Exception:
             return []
 
-        if progress_cb:
+        # GPT 재검증 비활성화: CLIP 최소 점수로 필터 후 상위 top_k까지 반환
+        if bool(getattr(self, "_disable_gpt_verify", True)):
             try:
-                progress_cb(35, "질의 임베딩")
+                clip_min = float(getattr(self, "_clip_min_score", 0.2))
             except Exception:
-                pass
+                clip_min = 0.2
+            scored = [(p, s) for (p, s) in scored if float(s) >= clip_min]
+            if top_k is not None and top_k > 0:
+                scored = scored[:min(top_k, len(scored))]
+            if progress_cb:
+                try:
+                    progress_cb(100, "완료")
+                except Exception:
+                    pass
+            return scored
 
-        qvecs = self._embed_texts([query_text])
-        if not qvecs:
-            return []
-        qvec = qvecs[0]
-
-        if callable(is_cancelled) and is_cancelled():
-            return []
-
-        if progress_cb:
-            try:
-                progress_cb(55, "벡터 로드")
-            except Exception:
-                pass
-
-        vec_map = {p: v for p, v in self._load_all_vectors(image_paths)}
-
-        if progress_cb:
-            try:
-                progress_cb(70, "유사도 계산")
-            except Exception:
-                pass
-
-        scored: List[Tuple[str, float]] = []
-        for path in image_paths:
-            vec = vec_map.get(path)
-            score = _cosine(qvec, vec) if vec else 0.0
-            scored.append((path, float(max(0.0, score))))
-
-        scored.sort(key=lambda x: x[1], reverse=True)
-
-        # 2차: GPT 비전 바이너리 재검증(전체 후보)
+        # 2차: GPT 비전 바이너리 재검증(선택)
         try:
             from .verifier_service import VerifierService  # type: ignore
         except Exception:
@@ -588,7 +638,10 @@ class OnlineEmbeddingIndex:
             _fut = None  # type: ignore
         workers = 32
         final: List[Tuple[str, float]] = []
-        tasks: List[Tuple[int, str]] = [(i, scored[i][0]) for i in range(len(scored))]
+        limit = len(scored)
+        if top_k is not None and top_k > 0:
+            limit = min(limit, int(top_k))
+        tasks: List[Tuple[int, str]] = [(i, scored[i][0]) for i in range(limit)]
         verifier = VerifierService(api_key=self._api_key, model=self._verify_model)
         if _fut is not None and workers > 1:
             with _fut.ThreadPoolExecutor(max_workers=workers) as ex:

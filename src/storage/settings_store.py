@@ -1111,6 +1111,8 @@ def load_settings(viewer) -> None:
         viewer._remember_last_view_mode = True
         # 상태바 상세 표시(선택 항목)
         viewer._statusbar_show_profile_details = bool(_get(s, "status/show_profile_details", False, bool)) if s else False
+        # 객체 탐지 완료 메시지 표시 여부(기본 False: 표시 안 함)
+        viewer._statusbar_show_detection_message = bool(_get(s, "status/show_detection_message", False, bool)) if s else False
         # YAML 구성 최종 적용: QSettings에서 읽은 값 위에 덮어써서 사용자가 명시한 config.yaml이 우선
         try:
             if _cfg_yaml_cached:
@@ -1215,6 +1217,7 @@ def save_settings(viewer) -> None:
         _save_ai_search_and_ext(viewer)
         # 표시/정보 상세
         viewer.settings.setValue("status/show_profile_details", bool(getattr(viewer, "_statusbar_show_profile_details", False)))
+        viewer.settings.setValue("status/show_detection_message", bool(getattr(viewer, "_statusbar_show_detection_message", False)))
         # 즉시 디스크에 동기화하여 크래시 시 손실 방지
         try:
             viewer.settings.sync()

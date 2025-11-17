@@ -37,6 +37,7 @@ from . import info_panel
 from .layout_builder import build_top_and_status_bars
 from .shortcuts_utils import set_global_shortcuts_enabled
 from .view_utils import clear_display as view_clear_display
+from .object_list_panel import ObjectListPanel
 from .utils_misc import clamp as util_clamp, enable_dnd_on as util_enable_dnd_on, setup_global_dnd as util_setup_global_dnd, handle_escape as util_handle_escape
 from . import lifecycle
 from . import log_actions
@@ -171,7 +172,18 @@ class JusawiViewer(QMainWindow):
             self.content_layout.setSpacing(6)
         except Exception:
             pass
-        # 스플리터 제거 후, 이미지 영역은 스프링으로 확장
+        # 왼쪽: 객체 리스트 패널
+        self.object_list_panel = ObjectListPanel(self.content_widget)
+        try:
+            self.object_list_panel.setFixedWidth(260)
+        except Exception:
+            pass
+        try:
+            self.object_list_panel.objectSelected.connect(self._on_object_selected)
+        except Exception:
+            pass
+        self.content_layout.addWidget(self.object_list_panel, 0)
+        # 중앙: 이미지 영역
         self.content_layout.addWidget(self.image_display_area, 1)
         # 정보 패널 (텍스트 + 지도 미리보기) → 내부도 QSplitter로 가변 높이
         self.info_panel = QWidget(self.content_widget)
@@ -204,6 +216,16 @@ class JusawiViewer(QMainWindow):
         self.content_layout.addWidget(self.info_panel)
         # 수평 레이아웃으로 이미지/정보 패널 표시
         self.main_layout.addWidget(self.content_widget, 1)
+
+        # 객체 탐지 상태
+        self._det_score_thr = 0.35
+        self._det_worker = None
+        self._last_detections = []  # list[dict]
+        try:
+            # 초기에는 패널을 숨겨놓되 자리만 유지
+            self.object_list_panel.setVisible(False)
+        except Exception:
+            pass
 
         # 하단 필름 스트립
         self.filmstrip = FilmstripView(self)
@@ -1481,6 +1503,128 @@ class JusawiViewer(QMainWindow):
     def _update_info_panel_sizes(self):
         return info_panel.update_info_panel_sizes(self)
 
+    # ----- 객체 탐지/패널 연동 -----
+    def _trigger_object_detection(self) -> None:
+        # 이전 워커 정리
+        try:
+            if self._det_worker and hasattr(self._det_worker, "_thread") and self._det_worker._thread is not None:
+                # best-effort: 완료 후 정리되므로 즉시 중단은 하지 않음
+                pass
+        except Exception:
+            pass
+        # 이미지 경로 확인
+        path = self.current_image_path or ""
+        if not path or not os.path.isfile(path):
+            try:
+                self.object_list_panel.setVisible(False)
+            except Exception:
+                pass
+            # 오버레이도 제거
+            try:
+                self.image_display_area.set_detections(None, None)
+            except Exception:
+                pass
+            return
+        # 로딩 플레이스홀더
+        try:
+            self.object_list_panel.clear_items()
+            from PyQt6.QtWidgets import QListWidgetItem  # type: ignore
+            self.object_list_panel.addItem(QListWidgetItem("분석 중..."))
+            self.object_list_panel.setVisible(True)
+        except Exception:
+            pass
+        # 워커 시작
+        try:
+            from ..services.object_detection_worker import DetectionWorker  # type: ignore
+            w = DetectionWorker(path, score_thr=float(getattr(self, "_det_score_thr", 0.5) or 0.5), max_results=100)
+            w.finished.connect(self._on_detection_finished)
+            w.error.connect(self._on_detection_error)
+            w.start()
+            self._det_worker = w
+        except Exception as e:
+            self._on_detection_error(str(e))
+
+    def _on_detection_finished(self, dets: list) -> None:
+        # dets: list of dicts: {bbox, label, score}
+        try:
+            self._last_detections = dets or []
+            path = self.current_image_path or ""
+            if not path or not os.path.isfile(path):
+                self.object_list_panel.setVisible(False)
+                self.image_display_area.set_detections(None, None)
+                return
+            # 점수 내림차순 정렬(가장 가능성 높은 항목이 위로)
+            try:
+                dets_sorted = sorted(self._last_detections, key=lambda d: float(d.get("score", 0.0)), reverse=True)
+            except Exception:
+                dets_sorted = self._last_detections
+            self._last_detections = dets_sorted
+            self.object_list_panel.populate(path, self._last_detections, thumb_size=160)
+            # 오버레이
+            boxes = [tuple(d.get("bbox", (0, 0, 0, 0))) for d in self._last_detections if "bbox" in d]
+            self.image_display_area.set_detections(boxes, highlight_index=None)
+            self.object_list_panel.setVisible(True)
+            try:
+                n = len(self._last_detections)
+                thr = float(getattr(self, "_det_score_thr", 0.5) or 0.5)
+                if bool(getattr(self, "_statusbar_show_detection_message", False)):
+                    self.statusBar().showMessage(f"객체 탐지 완료: {n}개 (thr={thr:.2f})", 2000)
+            except Exception:
+                pass
+        except Exception:
+            try:
+                self.object_list_panel.setVisible(False)
+            except Exception:
+                pass
+
+    def _on_detection_error(self, msg: str) -> None:
+        try:
+            self._last_detections = []
+            self.object_list_panel.clear_items()
+            from PyQt6.QtWidgets import QListWidgetItem  # type: ignore
+            self.object_list_panel.addItem(QListWidgetItem(f"탐지 실패: {msg}"))
+            self.object_list_panel.setVisible(True)
+            self.image_display_area.set_detections(None, None)
+        except Exception:
+            pass
+
+    def _on_object_selected(self, meta: dict) -> None:
+        try:
+            idx = int(meta.get("index", -1))
+        except Exception:
+            idx = -1
+        try:
+            self.image_display_area.highlight_detection(idx if idx >= 0 else None)
+        except Exception:
+            pass
+
+    # ----- 폴더 지도 보기 -----
+    def open_folder_map_dialog(self) -> None:
+        try:
+            files = getattr(self, "image_files_in_dir", []) or []
+            if not files:
+                import os
+                cur = getattr(self, "current_image_path", "") or ""
+                if cur and os.path.exists(cur):
+                    dir_path = os.path.dirname(cur)
+                    if dir_path and os.path.isdir(dir_path):
+                        self.scan_directory(dir_path)
+                        files = getattr(self, "image_files_in_dir", []) or []
+            if not files:
+                from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
+                QMessageBox.information(self, "폴더 지도", "현재 폴더를 확인할 수 없습니다.")
+                return
+            from .folder_map_dialog import FolderMapDialog  # type: ignore
+            d = FolderMapDialog(self, image_paths=files, current_path=getattr(self, "current_image_path", None))
+            d.setModal(False)
+            d.show()
+        except Exception as e:
+            try:
+                from PyQt6.QtWidgets import QMessageBox  # type: ignore[import]
+                QMessageBox.warning(self, "폴더 지도", f"지도를 열 수 없습니다: {e}")
+            except Exception:
+                pass
+
     def toggle_privacy_hide_location(self) -> None:
         """주소/지도 표시(위치 정보) 프라이버시 토글.
 
@@ -1810,3 +1954,9 @@ class JusawiViewer(QMainWindow):
     def _restore_overlays_to_layout(self) -> None:
         from .fs_overlays import restore_overlays_to_layout
         restore_overlays_to_layout(self)
+
+    def open_comparsion_dialog(self) -> None:
+        from .comparsion_dialog import ComparsionDialog  # type: ignore
+        dlg = ComparsionDialog(self)
+        dlg.setModal(False)
+        dlg.show()

@@ -1,5 +1,6 @@
 import sys
 import os
+from PyQt6.QtCore import QCoreApplication, Qt  # type: ignore[import]
 from PyQt6.QtWidgets import QApplication  # type: ignore[import]
 from src.ui.main_window import JusawiViewer
 from src.utils.logging_setup import setup_logging, get_logger, shutdown_logging
@@ -25,6 +26,63 @@ if __name__ == "__main__":
         log.info("app_start | argv=%s", _mask_args(sys.argv[1:]))
     except Exception:
         log = None  # type: ignore
+
+    # 로컬 모델을 사전 다운로드(models/ 폴더) — 환경변수 미사용
+    try:
+        repo_root = os.path.abspath(os.path.dirname(__file__))
+        models_dir = os.path.join(repo_root, "models")
+        os.makedirs(models_dir, exist_ok=True)
+        def _ensure_repo(repo_id: str, target_dir_name: str) -> None:
+            try:
+                tgt = os.path.join(models_dir, target_dir_name)
+                if os.path.isdir(tgt) and os.listdir(tgt):
+                    if log:
+                        log.info("model_present | %s", target_dir_name)
+                    return
+                try:
+                    from huggingface_hub import snapshot_download  # type: ignore
+                except Exception as e:
+                    if log:
+                        log.warning("hf_missing | skip_download | err=%s", str(e))
+                    return
+                # 로컬 디렉터리에 직접 다운로드(심볼릭링크 비활성화: Windows 호환)
+                snapshot_download(
+                    repo_id=repo_id,
+                    local_dir=tgt,
+                    local_dir_use_symlinks=False,
+                    allow_patterns=None,
+                    ignore_patterns=None,
+                )
+                if log:
+                    log.info("model_downloaded | %s -> %s", repo_id, target_dir_name)
+            except Exception as e:
+                if log:
+                    log.warning("model_prep_fail | repo=%s | err=%s", repo_id, str(e))
+        # 텍스트(멀티링구얼) / 이미지(CLIP) 모델
+        _ensure_repo("sentence-transformers/clip-ViT-B-32-multilingual-v1", "clip-ViT-B-32-multilingual-v1")
+        _ensure_repo("sentence-transformers/clip-ViT-B-32", "clip-ViT-B-32")
+    except Exception as e:
+        try:
+            if log:
+                log.warning("model_prep_outer_fail | err=%s", str(e))
+        except Exception:
+            pass
+
+    # QtWebEngine 요구사항: QCoreApplication 생성 전 초기 설정
+    try:
+        # OpenGL 컨텍스트 공유(필수 경고 회피)
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+        # QtWebEngine을 미리 임포트(설치되지 않은 환경은 무시)
+        try:
+            import PyQt6.QtWebEngineWidgets  # type: ignore
+        except Exception:
+            pass
+        try:
+            import PyQt6.QtWebEngineCore  # type: ignore
+        except Exception:
+            pass
+    except Exception:
+        pass
 
     app = QApplication(sys.argv)
     # 명령줄 인자: 파일 또는 폴더 경로 사전 파싱

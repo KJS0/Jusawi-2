@@ -198,6 +198,16 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
                 should_scan = True
             if should_scan and not already_listed:
                 viewer.scan_directory(dirp)
+            else:
+                # 동일 폴더에서 이미 목록이 준비되어 있다면, 현재 경로의 인덱스로 동기화
+                try:
+                    nc = os.path.normcase
+                    paths = getattr(viewer, "image_files_in_dir", []) or []
+                    idx = next((i for i, p in enumerate(paths) if nc(p) == nc(path)), -1)
+                    if idx >= 0:
+                        viewer.current_image_index = idx
+                except Exception:
+                    pass
         except Exception:
             try:
                 if should_scan:
@@ -359,6 +369,12 @@ def apply_loaded_image(viewer: "JusawiViewer", path: str, img, source: str) -> N
     try:
         # 즉시 스케일 적용 트리거 1회만 수행(중복 호출 제거)
         viewer._scale_apply_timer.start(0)
+    except Exception:
+        pass
+    # 객체 탐지: 이미지 적용 후 트리거
+    try:
+        if hasattr(viewer, "_trigger_object_detection"):
+            viewer._trigger_object_detection()
     except Exception:
         pass
 

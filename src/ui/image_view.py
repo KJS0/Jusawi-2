@@ -1,5 +1,5 @@
-from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QFrame  # type: ignore[import]
-from PyQt6.QtGui import QPixmap, QTransform, QPainter, QCursor, QColor, QBrush  # type: ignore[import]
+from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsRectItem, QFrame  # type: ignore[import]
+from PyQt6.QtGui import QPixmap, QTransform, QPainter, QCursor, QColor, QBrush, QPen  # type: ignore[import]
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPointF, QRectF  # type: ignore[import]
 
 class ImageView(QGraphicsView):
@@ -64,11 +64,19 @@ class ImageView(QGraphicsView):
         self._natural_width = 0
         self._natural_height = 0
 
+        # Detection overlay items
+        self._det_rect_items: list[QGraphicsRectItem] = []
+        self._det_halo_items: list[QGraphicsRectItem] = []
+        self._det_highlight_index: int = -1
+
     # API 호환: file_utils.load_image_util에서 setPixmap 호출을 사용
     def setPixmap(self, pixmap: QPixmap | None):
         self._scene.clear()
         self._pix_item = None
         self._original_pixmap = None
+        self._det_rect_items = []
+        self._det_halo_items = []
+        self._det_highlight_index = -1
         if pixmap and not pixmap.isNull():
             self._pix_item = QGraphicsPixmapItem(pixmap)
             self._scene.addItem(self._pix_item)
@@ -121,6 +129,125 @@ class ImageView(QGraphicsView):
                     pass
         except Exception:
             pass
+
+    # ----- Detection overlays -----
+    def set_detections(self, boxes: list[tuple[int, int, int, int]] | None, highlight_index: int | None = None) -> None:
+        """
+        boxes are in original image coordinates. We parent rects to the pixmap item,
+        and convert to the pixmap-local coordinates by multiplying by _source_scale.
+        """
+        # Clear existing
+        for it in getattr(self, "_det_rect_items", []):
+            try:
+                self._scene.removeItem(it)
+            except Exception:
+                pass
+        for it in getattr(self, "_det_halo_items", []):
+            try:
+                self._scene.removeItem(it)
+            except Exception:
+                pass
+        self._det_rect_items = []
+        self._det_halo_items = []
+        self._det_highlight_index = -1
+        if not boxes or not self._pix_item or not self._original_pixmap:
+            self.viewport().update()
+            return
+        try:
+            ss = float(getattr(self, "_source_scale", 1.0) or 1.0)
+        except Exception:
+            ss = 1.0
+        # Pens: base invisible, highlight uses black halo + bright inner line
+        base_pen = QPen()
+        base_pen.setStyle(Qt.PenStyle.NoPen)
+        halo_pen = QPen(QColor(0, 0, 0, 255))            # 검정 외곽선
+        halo_pen.setWidth(6)
+        halo_pen.setStyle(Qt.PenStyle.SolidLine)
+        halo_pen.setCosmetic(True)
+        hi_pen = QPen(QColor(0, 255, 128, 255))          # 네온 라임색 내부선
+        hi_pen.setWidth(3)
+        hi_pen.setStyle(Qt.PenStyle.SolidLine)
+        hi_pen.setCosmetic(True)
+        for i, b in enumerate(boxes):
+            try:
+                x1, y1, x2, y2 = b
+                if ss != 1.0:
+                    x1, y1, x2, y2 = int(round(x1 * ss)), int(round(y1 * ss)), int(round(x2 * ss)), int(round(y2 * ss))
+                # clamp to pixmap bounds
+                try:
+                    img_w = int(self._original_pixmap.width())
+                    img_h = int(self._original_pixmap.height())
+                except Exception:
+                    img_w = img_h = 0
+                if img_w > 0 and img_h > 0:
+                    x1 = max(0, min(x1, img_w - 1))
+                    y1 = max(0, min(y1, img_h - 1))
+                    x2 = max(x1 + 1, min(x2, img_w))
+                    y2 = max(y1 + 1, min(y2, img_h))
+                w = max(1, x2 - x1)
+                h = max(1, y2 - y1)
+                # 두 겹: 아래(halo), 위(main)
+                halo_item = QGraphicsRectItem(x1, y1, w, h, parent=self._pix_item)
+                rect_item = QGraphicsRectItem(x1, y1, w, h, parent=self._pix_item)
+                if highlight_index is not None and i == int(highlight_index):
+                    halo_item.setPen(halo_pen)
+                    rect_item.setPen(hi_pen)
+                else:
+                    halo_item.setPen(base_pen)
+                    rect_item.setPen(base_pen)
+                # 내부는 투명, 경계선만 표시
+                halo_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+                rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+                # 투명도 강제 1.0 (외부 효과에 의한 반투명화 방지)
+                try:
+                    halo_item.setOpacity(1.0)
+                    rect_item.setOpacity(1.0)
+                except Exception:
+                    pass
+                halo_item.setZValue(9.9)
+                rect_item.setZValue(10.0)
+                self._det_halo_items.append(halo_item)
+                self._det_rect_items.append(rect_item)
+            except Exception:
+                pass
+        if isinstance(highlight_index, int):
+            self._det_highlight_index = int(highlight_index)
+        self.viewport().update()
+
+    def highlight_detection(self, index: int | None) -> None:
+        if not self._det_rect_items:
+            return
+        try:
+            hi = int(index) if index is not None else -1
+        except Exception:
+            hi = -1
+        halo_pen = QPen(QColor(0, 0, 0, 255))
+        halo_pen.setWidth(6)
+        halo_pen.setStyle(Qt.PenStyle.SolidLine)
+        halo_pen.setCosmetic(True)
+        hi_pen = QPen(QColor(0, 255, 128, 255))
+        hi_pen.setWidth(3)
+        base_pen = QPen()
+        base_pen.setStyle(Qt.PenStyle.NoPen)  # 비선택 항목은 표시하지 않음
+        for i, it in enumerate(self._det_rect_items):
+            try:
+                # 아래/위 두 겹 모두 갱신
+                if 0 <= i < len(self._det_halo_items):
+                    halo_item = self._det_halo_items[i]
+                    halo_item.setPen(halo_pen if i == hi else base_pen)
+                    try:
+                        halo_item.setOpacity(1.0)
+                    except Exception:
+                        pass
+                it.setPen(hi_pen if i == hi else base_pen)
+                try:
+                    it.setOpacity(1.0)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        self._det_highlight_index = hi
+        self.viewport().update()
 
     def originalPixmap(self) -> QPixmap | None:
         return self._original_pixmap

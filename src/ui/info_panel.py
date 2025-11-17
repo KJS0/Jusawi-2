@@ -289,7 +289,7 @@ def update_info_panel(owner) -> None:
                 except Exception:
                     w, h = 600, 360
                 schedule_map_fetch(owner, float(lat), float(lon), int(max(64, w)), int(max(64, h)), int(getattr(owner, "_info_map_zoom", 12)))
-                # 외부 지도 링크 툴팁 설정
+                # 외부 지도 링크 툴팁 설정 (Google Maps)
                 try:
                     owner.info_map_label.setToolTip(f"https://maps.google.com/?q={float(lat)},{float(lon)}")
                 except Exception:
@@ -436,7 +436,8 @@ def kick_map_fetch(owner) -> None:
     token = int(owner._map_req_token)
     try:
         from ..services.map_cache import submit_fetch  # type: ignore
-        submit_fetch(lat, lon, int(w), int(h), int(zoom), token, owner._map_emitter, "ready")
+        # 제공자 고정: Google (키 미설정/실패 시 geocoding.get_static_map_png에서 OSM으로 자동 폴백)
+        submit_fetch(lat, lon, int(w), int(h), int(zoom), token, owner._map_emitter, "ready", provider="google")
     except Exception:
         pass
 

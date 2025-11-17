@@ -60,3 +60,4 @@ config.yaml
 
 # Models
 models/
+yolo11s.pt
